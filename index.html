@@ -3141,6 +3141,30 @@ try{if(localStorage.getItem(SAVEKEY))setTimeout(()=>loadGame(true),300);else toa
 window.__city={SOLIDS,FLOORS,SHOPS,npcs,LANES,heightAt,collide,START,frame,PROPS,STATICS,PLAYER,walk,world,camera,xr:{xrState,xrUpdate,ctrls,XRHEAD,onXRStart,onXREnd,poseHand,makeHand,buildHand,tryGrab,dropHeld,updateHandVisuals},
   game:{getTod:()=>tod,WORLD,JOBS,PHONE,togglePhone,drawPhone,startTaxi,startDelivery,quitJob,saveGame,loadGame,talkTo,nearPerson,skipTime,ANCHORS,BENCHES,CHUNKS,updateChunks,floorBelow,climbPick,CLIMBS,HFLOORS,POIS,BLDGS,intKids:()=>INTKIDS,holsterGripPoint,KIT,HOLSTER,holsterPose,holsterGun,drawGun,MAGS,AMMO,MDEF,spawnMag,ejectMag,insertMag,tryGrab,dropHeld,updateHolds,DRIVE,enterCar,exitCar,nearCar,driveUpdate,xrDrive,seatInfo,CARS,GUNS,shoot,spawnGun,raycast,LB,torso,BODY,bodyRoot,REF,DESK,lightState,hitNPC,openDialogue,closeDialogue,nearStaff,unpaidFor,getDLG:()=>DLG,getWallet:()=>WALLET,deskGrab,deskPunch,openMenu,drawMenu,menuPanel,dlgPanel,activateNear,activeProps,refreshStatics,activeS,bleed,drops}};
 renderer.setAnimationLoop(frame);
+
+/* CHEET CITY: META IMMERSIVE PWA AUTO-START */
+if (window.getDigitalGoodsService !== undefined) {
+  (async () => {
+    if (!navigator.xr || !navigator.xr.isSessionSupported) return;
+    const supported = await navigator.xr.isSessionSupported('immersive-vr');
+    if (!supported || xrSession) return;
+
+    const sess = await navigator.xr.requestSession('immersive-vr', {
+      optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking']
+    });
+
+    renderer.xr.setReferenceSpaceType('local-floor');
+    if (renderer.xr.setFoveation) renderer.xr.setFoveation(1);
+    await renderer.xr.setSession(sess);
+
+    xrSession = sess;
+    onXRStart();
+    sess.addEventListener('end', () => {
+      xrSession = null;
+      onXREnd();
+    }, { once: true });
+  })().catch(err => console.error('Cheet City VR startup failed:', err));
+}
 }
 (function(){
   let started=false;const bootAt=performance.now();
