@@ -3084,6 +3084,7 @@ bVR.addEventListener('click',async()=>{
   try{
     const sess=await navigator.xr.requestSession('immersive-vr',{optionalFeatures:['local-floor','bounded-floor','hand-tracking']});
     renderer.xr.setReferenceSpaceType('local-floor');
+    if(renderer.xr.setFramebufferScaleFactor)renderer.xr.setFramebufferScaleFactor(0.72);
     if(renderer.xr.setFoveation)renderer.xr.setFoveation(1);
     await renderer.xr.setSession(sess);xrSession=sess;onXRStart();
     sess.addEventListener('end',()=>{xrSession=null;onXREnd();});
@@ -3154,6 +3155,7 @@ if (window.getDigitalGoodsService !== undefined) {
     });
 
     renderer.xr.setReferenceSpaceType('local-floor');
+    if(renderer.xr.setFramebufferScaleFactor)renderer.xr.setFramebufferScaleFactor(0.72);
     if (renderer.xr.setFoveation) renderer.xr.setFoveation(1);
     await renderer.xr.setSession(sess);
 

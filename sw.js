@@ -1,4 +1,4 @@
-const CACHE = 'cheet-city-shell-v3';
+const CACHE = 'cheet-city-shell-v4';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
 const REMOTE_3D_LIBS = new Set([
   'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js',
