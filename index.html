@@ -360,8 +360,8 @@ function flushBatches(){BATCH.forEach(b=>{
   let mat=b.mat;if(b.cols){mat=PLAINMAT[b.mk]||(PLAINMAT[b.mk]=std({roughness:b.mat.roughness,metalness:b.mat.metalness}));mat.userData.noCast=b.mat.userData.noCast;}
   const im=new THREE.InstancedMesh(geo,mat,b.list.length);b.list.forEach((m,i)=>im.setMatrixAt(i,m));if(b.cols){b.cols.forEach((c,i)=>im.setColorAt(i,c));if(im.instanceColor)im.instanceColor.needsUpdate=true;}
   im.castShadow=!mat.userData.noCast&&b.layer!=='int';im.receiveShadow=true;im.userData.layer=b.layer;im.userData.c=c;im.userData.r=geo.boundingSphere.radius;scene.add(im);CHUNKS.push(im);});BATCH.clear();}
-function updateChunks(px,pz){CHUNKS.forEach(im=>{const u=im.userData;im.visible=Math.hypot(u.c.x-px,u.c.z-pz)-u.r<LDIST[u.layer];});
-  PUTS.forEach(m=>{m.visible=Math.hypot(m.position.x-px,m.position.z-pz)<150;});}
+function updateChunks(px,pz){CHUNKS.forEach(im=>{const u=im.userData,dx=u.c.x-px,dz=u.c.z-pz,r=LDIST[u.layer]+u.r;im.visible=dx*dx+dz*dz<r*r;});
+  PUTS.forEach(m=>{const dx=m.position.x-px,dz=m.position.z-pz;m.visible=dx*dx+dz*dz<22500;});}
 // per-instance coloured parts (products, books, clothes, fruit)
 const CBOX=[],CSPH=[];
 function cinst(list,x,y,z,sx,sy,sz,c){_q.identity();_p.set(x,y,z);_s.set(sx,sy,sz);_m.compose(_p,_q,_s).premultiply(CTX.m);list.push([_m.clone(),c]);}
@@ -1525,8 +1525,16 @@ function freeMove(n,dt){
   if(mv>0.2)n.yaw=angLerp(n.yaw,Math.atan2(mx,mz),1-Math.exp(-8*dt));
   n.phase+=mv*dt*3.7;n.swing=Math.sin(n.phase)*Math.min(0.9,0.45*mv/1.25);n.bob=Math.abs(Math.sin(n.phase))*0.04*Math.min(1,mv);n.cur=mv;
 }
+const WALKER_BINS=new Map(),WALKER_ACTIVE_BUCKETS=[];
+function getWalkerBins(L){let b=WALKER_BINS.get(L);if(!b){b=[new Map(),new Map()];WALKER_BINS.set(L,b);}return b;}
 function updateNPCs(dt){
-  const walkers=npcs.filter(n=>n.state==='lane');
+  // Lane-local buckets keep pedestrian spacing checks proportional to nearby
+  // walkers instead of comparing every pedestrian with the entire city.
+  const walkerBin=n=>Math.floor(n.t*n.dir*n.lane.len/1.4);
+  const addWalker=n=>{const bins=getWalkerBins(n.lane)[n.dir>0?1:0],k=walkerBin(n);let a=bins.get(k);if(!a){a=[];bins.set(k,a);}if(!a.length)WALKER_ACTIVE_BUCKETS.push(a);a.push(n);};
+  const removeWalker=n=>{const bins=getWalkerBins(n.lane)[n.dir>0?1:0],k=walkerBin(n),a=bins.get(k);if(!a)return;const i=a.indexOf(n);if(i>=0)a.splice(i,1);if(!a.length)bins.delete(k);};
+  for(const a of WALKER_ACTIVE_BUCKETS)a.length=0;WALKER_ACTIVE_BUCKETS.length=0;
+  for(const n of npcs)if(n.state==='lane')addWalker(n);
   npcs.forEach((n,i)=>{
     if(n.state==='down'){
       const b=n.body;
@@ -1539,10 +1547,15 @@ function updateNPCs(dt){
     }
     if(n.state==='lane'){
       const L=n.lane;
+      removeWalker(n);
       if(n.idle>0){n.idle-=dt;n.swing*=Math.pow(0.02,dt);n.bob=0;n.yaw=angLerp(n.yaw,n.idleYaw,1-Math.exp(-4*dt));}
       else{
         let sp=n.speed;
-        for(let k=0;k<walkers.length;k++){const m=walkers[k];if(m===n||m.lane!==L||m.dir!==n.dir)continue;const ahead=(m.t-n.t)*n.dir*L.len;if(ahead>0&&ahead<1.4)sp=Math.min(sp,m.idle>0?0:m.cur*0.95);}
+        const bins=getWalkerBins(L)[n.dir>0?1:0],bi=walkerBin(n);
+        for(let pass=0;pass<2;pass++){
+          const a=bins.get(bi+pass);if(!a)continue;
+          for(let k=0;k<a.length;k++){const m=a[k],ahead=(m.t-n.t)*n.dir*L.len;if(ahead>0&&ahead<1.4)sp=Math.min(sp,m.idle>0?0:m.cur*0.95);}
+        }
         n.cur=sp;n.t+=n.dir*sp*dt/L.len;
         if(n.t>1||n.t<0){n.t=clamp(n.t,0,1);n.dir*=-1;n.idle=rr(0.4,1.2);n.idleYaw=Math.atan2(n.dir*L.dx,n.dir*L.dz);}
         else if(L.face!=null&&R()<dt*0.035){n.idle=rr(2,6);n.idleYaw=L.face+rr(-0.35,0.35);}
@@ -1551,6 +1564,7 @@ function updateNPCs(dt){
       }
       n.lat+=clamp(n.dir*0.45-n.lat,-dt*0.9,dt*0.9);
       n.x=L.a[0]+L.dx*L.len*n.t+L.dz*n.lat;n.z=L.a[1]+L.dz*L.len*n.t-L.dx*n.lat;
+      addWalker(n);
     }else if(n.state==='free')freeMove(n,dt);
     else if(n.state==='talk'){n.talking=true;n.phase+=dt*1.2;n.swing=0;n.bob=0;n.yaw=angLerp(n.yaw,Math.atan2(PLAYER.x-n.x,PLAYER.z-n.z),1-Math.exp(-6*dt));}
     else{n.phase+=dt*0.9;n.swing=n.kind==='mannequin'?0:Math.sin(n.phase)*0.04;n.bob=n.kind==='mannequin'?0:Math.sin(n.phase*0.7)*0.005;}
@@ -2259,18 +2273,37 @@ function writeCar(c){const hide=c===DRIVE.car;_cq.setFromAxisAngle(_ay,c.yaw);_c
 function placeCar(c){const L=c.lane;if(L.axis==='x'){c.x=c.s;c.z=L.c;c.yaw=L.dir>0?Math.PI/2:-Math.PI/2;}else{c.x=L.c;c.z=c.s;c.yaw=L.dir>0?0:Math.PI;}}
 CARS.forEach(c=>{if(c.lane)placeCar(c);writeCar(c);});
 for(const k in CIM)CIM[k].instanceMatrix.needsUpdate=true;
+const CAR_GRID_CELL=8,CAR_GRID=new Map(),CAR_GRID_ACTIVE=[];
+function addCarGrid(c){const gx=Math.floor(c.x/CAR_GRID_CELL),gz=Math.floor(c.z/CAR_GRID_CELL),key=gx*4096+gz;let a=CAR_GRID.get(key);if(!a){a=[];CAR_GRID.set(key,a);}if(!a.length)CAR_GRID_ACTIVE.push(a);a.push(c);}
+function rebuildCarGrid(){for(const a of CAR_GRID_ACTIVE)a.length=0;CAR_GRID_ACTIVE.length=0;for(const c of CARS)addCarGrid(c);}
+const OBS_CELL=8,TRAFFIC_GRID=new Map(),TRAFFIC_ACTIVE=[];
+function trafficBucket(x,z){const gx=Math.floor(x/OBS_CELL),gz=Math.floor(z/OBS_CELL),key=gx*4096+gz;let b=TRAFFIC_GRID.get(key);if(!b){b={cars:[],npcs:[]};TRAFFIC_GRID.set(key,b);}if(!b.cars.length&&!b.npcs.length)TRAFFIC_ACTIVE.push(b);return b;}
+function rebuildTrafficGrid(){for(const b of TRAFFIC_ACTIVE){b.cars.length=0;b.npcs.length=0;}TRAFFIC_ACTIVE.length=0;
+  for(const o of CARS)if(!o.lane)trafficBucket(o.x,o.z).cars.push(o);
+  for(const n of npcs){const p=n.state==='down'&&n.body?n.body.position:null;trafficBucket(p?p.x:n.x,p?p.z:n.z).npcs.push(n);}
+}
+rebuildCarGrid();
 function updateCars(dt){
   TPH+=dt;setLights();
+  // Traffic only checks pedestrians and parked vehicles in a narrow corridor
+  // around each lane. Build this index once per frame, then query nearby cells.
+  rebuildTrafficGrid();
   CLANES.forEach(L=>{
-    const list=L.cars.slice().sort((a,b)=>(a.s-L.a)*L.dir-(b.s-L.a)*L.dir);
+    const list=L.cars.sort((a,b)=>(a.s-L.a)*L.dir-(b.s-L.a)*L.dir);
     list.forEach((c,i)=>{
       const front=c.s+L.dir*c.L/2;let vt=c.vmax;
       const ah=list[i+1];if(ah){const gap=(ah.s-c.s)*L.dir-(ah.L+c.L)/2;if(gap<14)vt=Math.min(vt,Math.max(0,gap-2.5)*1.1);}
       for(const sp of L.stops){const dist=(sp-front)*L.dir;
         if(dist>-0.5&&dist<35){const st=lightState(L.group);if(st==='r'||(st==='y'&&dist>7))vt=Math.min(vt,Math.max(0,dist-0.3)*0.8);}}
       const obs=(px,pz,ext)=>{const along=((L.axis==='x'?px:pz)-front)*L.dir-(ext||0),lat=Math.abs((L.axis==='x'?pz:px)-L.c);if(along>-0.5&&along<10&&lat<1.8)vt=Math.min(vt,Math.max(0,along-1.6)*1.1);};
-      {const vb=vt;obs(PLAYER.x,PLAYER.z);if(vt<vb&&c.v<0.4&&!DRIVE.car){c.wait=(c.wait||0)+dt;if(c.wait>2.5&&!(c.honk>0)){c.honk=7;if(Math.hypot(c.x-PLAYER.x,c.z-PLAYER.z)<30)sfx('horn',0.6);}}else c.wait=0;c.honk=(c.honk||0)-dt;}CARS.forEach(o=>{if(o.lane||o===c)return;if(!o.parked||Math.abs((L.axis==='x'?o.z:o.x)-L.c)<2.2)obs(o.x,o.z,o.L/2+0.6);});
-      npcs.forEach(n=>{if(n.state==='down'&&n.body)obs(n.body.position.x,n.body.position.z);else obs(n.x,n.z);});
+      {const vb=vt;obs(PLAYER.x,PLAYER.z);if(vt<vb&&c.v<0.4&&!DRIVE.car){c.wait=(c.wait||0)+dt;if(c.wait>2.5&&!(c.honk>0)){c.honk=7;if(Math.hypot(c.x-PLAYER.x,c.z-PLAYER.z)<30)sfx('horn',0.6);}}else c.wait=0;c.honk=(c.honk||0)-dt;}
+      const axisX=L.axis==='x',lo=L.dir>0?front-1:front-15,hi=L.dir>0?front+15:front+1;
+      const minX=axisX?lo:L.c-2.5,maxX=axisX?hi:L.c+2.5,minZ=axisX?L.c-2.5:lo,maxZ=axisX?L.c+2.5:hi;
+      for(let gx=Math.floor(minX/OBS_CELL);gx<=Math.floor(maxX/OBS_CELL);gx++)for(let gz=Math.floor(minZ/OBS_CELL);gz<=Math.floor(maxZ/OBS_CELL);gz++){
+        const b=TRAFFIC_GRID.get(gx*4096+gz);if(!b)continue;
+        for(const o of b.cars)if(o!==c&&(!o.parked||Math.abs((axisX?o.z:o.x)-L.c)<2.2))obs(o.x,o.z,o.L/2+0.6);
+        for(const n of b.npcs){if(n.state==='down'&&n.body)obs(n.body.position.x,n.body.position.z);else obs(n.x,n.z);}
+      }
       c.v+=clamp(vt-c.v,-8*dt,3*dt);if(c.v<0)c.v=0;
       c.s+=L.dir*c.v*dt;
       if((c.s-L.a)*L.dir>L.len)c.s=L.a;
@@ -2278,6 +2311,7 @@ function updateCars(dt){
     });
   });
   for(const k in CIM)CIM[k].instanceMatrix.needsUpdate=true;
+  rebuildCarGrid();
   if(PH)CARS.forEach(c=>{
     const near=Math.hypot(c.x-PLAYER.x,c.z-PLAYER.z)<28;
     if(near){if(!c.kin){const b=new CANNON.Body({mass:0,type:CANNON.Body.KINEMATIC});b.addShape(new CANNON.Box(new CANNON.Vec3(c.W/2,c.H/2,c.L/2)));b.car=c;world.addBody(b);c.kin=b;}
@@ -2287,12 +2321,16 @@ function updateCars(dt){
 }
 // keep you (and fleeing people) from walking through cars
 function carPush(p,r,skip){
-  for(const c of CARS){if(c===skip)continue;const dx=p.x-c.x,dz=p.z-c.z;if(dx*dx+dz*dz>40)continue;
+  const gx=Math.floor(p.x/CAR_GRID_CELL),gz=Math.floor(p.z/CAR_GRID_CELL);
+  for(let ix=gx-1;ix<=gx+1;ix++)for(let iz=gz-1;iz<=gz+1;iz++){
+    const nearby=CAR_GRID.get(ix*4096+iz);if(!nearby)continue;
+    for(const c of nearby){if(c===skip)continue;const dx=p.x-c.x,dz=p.z-c.z;if(dx*dx+dz*dz>40)continue;
     const cs=Math.cos(c.yaw),sn=Math.sin(c.yaw),lx=dx*cs-dz*sn,lz=dx*sn+dz*cs,hx=c.W/2,hz=c.L/2;
     const qx=clamp(lx,-hx,hx),qz=clamp(lz,-hz,hz),ex=lx-qx,ez=lz-qz,d2=ex*ex+ez*ez;if(d2>=r*r)continue;
     let nx,nz;if(d2>1e-9){const d=Math.sqrt(d2);nx=qx+ex/d*r;nz=qz+ez/d*r;}
     else{const m=Math.min(hx-Math.abs(lx),hz-Math.abs(lz));if(m===hx-Math.abs(lx)){nx=Math.sign(lx||1)*(hx+r);nz=lz;}else{nx=lx;nz=Math.sign(lz||1)*(hz+r);}}
     p.x=c.x+nx*cs+nz*sn;p.z=c.z-nx*sn+nz*cs;}
+  }
 }
 
 /* ---- shooting effects ---- */
@@ -3084,7 +3122,6 @@ bVR.addEventListener('click',async()=>{
   try{
     const sess=await navigator.xr.requestSession('immersive-vr',{optionalFeatures:['local-floor','bounded-floor','hand-tracking']});
     renderer.xr.setReferenceSpaceType('local-floor');
-    if(renderer.xr.setFramebufferScaleFactor)renderer.xr.setFramebufferScaleFactor(0.72);
     if(renderer.xr.setFoveation)renderer.xr.setFoveation(1);
     await renderer.xr.setSession(sess);xrSession=sess;onXRStart();
     sess.addEventListener('end',()=>{xrSession=null;onXREnd();});
@@ -3149,16 +3186,12 @@ if (window.getDigitalGoodsService !== undefined) {
     if (!navigator.xr || !navigator.xr.isSessionSupported) return;
     const supported = await navigator.xr.isSessionSupported('immersive-vr');
     if (!supported || xrSession) return;
-
     const sess = await navigator.xr.requestSession('immersive-vr', {
       optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking']
     });
-
     renderer.xr.setReferenceSpaceType('local-floor');
-    if(renderer.xr.setFramebufferScaleFactor)renderer.xr.setFramebufferScaleFactor(0.72);
     if (renderer.xr.setFoveation) renderer.xr.setFoveation(1);
     await renderer.xr.setSession(sess);
-
     xrSession = sess;
     onXRStart();
     sess.addEventListener('end', () => {
