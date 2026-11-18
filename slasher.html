@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#07050a">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icons/icon-192.png" type="image/png">
+<title>Cheet Slasher</title>
+<style>
+:root{--bg:#07050a;--ink:#f1e9e4;--muted:#a99a94;--blood:#a3121b;--panel:rgba(14,9,11,.84);--line:rgba(241,233,228,.18);color-scheme:dark}
+*,*::before,*::after{box-sizing:border-box}
+html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--ink);font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+#c{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;outline:none}
+[hidden]{display:none!important}
+button{font:700 15px/1 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:12px 16px;cursor:pointer;touch-action:manipulation}
+button.primary{background:var(--blood);border-color:transparent}
+button:focus-visible{outline:2px solid #ff6a6a;outline-offset:2px}
+#vr{position:fixed;top:calc(env(safe-area-inset-top,0px) + 12px);right:12px;z-index:5}
+#gate{position:fixed;inset:0;z-index:10;display:grid;place-items:center;padding:16px;background:radial-gradient(ellipse at 50% 30%,rgba(90,8,14,.55),rgba(7,5,10,.96) 70%)}
+#gate .box{max-width:460px;width:100%;text-align:center}
+#gate h1{font:400 clamp(44px,12vw,72px)/1 Impact,"Arial Black",sans-serif;margin:0 0 10px;color:#d4141c;letter-spacing:.01em}
+#gate p{color:var(--muted);margin:0 0 22px}
+#gate .row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+#gate small{display:block;margin-top:18px;color:#7a6e6a}
+#lockHint{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 28px);transform:translateX(-50%);z-index:4}
+#cross{position:fixed;left:50%;top:50%;width:6px;height:6px;margin:-3px 0 0 -3px;border-radius:50%;background:rgba(255,255,255,.75);box-shadow:0 0 0 2px rgba(0,0,0,.4);pointer-events:none;z-index:3}
+#tc{position:fixed;inset:auto 0 0 0;height:0;z-index:4}
+#stick{position:fixed;left:calc(env(safe-area-inset-left,0px) + 22px);bottom:calc(env(safe-area-inset-bottom,0px) + 22px);width:132px;height:132px;border-radius:50%;background:rgba(255,255,255,.08);border:1px solid var(--line);touch-action:none}
+#knob{position:absolute;left:41px;top:41px;width:50px;height:50px;border-radius:50%;background:rgba(255,255,255,.28)}
+#tbtns{position:fixed;right:calc(env(safe-area-inset-right,0px) + 16px);bottom:calc(env(safe-area-inset-bottom,0px) + 18px);display:grid;grid-template-columns:auto auto;gap:10px}
+#tbtns button{min-width:84px;min-height:56px}
+#tAtk{grid-column:span 2;min-height:72px!important;background:var(--blood);border-color:transparent;font-size:18px}
+#tMenu{position:fixed;top:calc(env(safe-area-inset-top,0px) + 12px);left:12px}
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<canvas id="c" tabindex="0" aria-label="Cheet Slasher game view"></canvas>
+
+<div id="gate">
+  <div class="box">
+    <h1>CHEET SLASHER</h1>
+    <p>A multiplayer slasher for VR, PC and phones. Hunt campers through a sleepy neighborhood or a lakeside camp, or play as a camper and try to survive until dawn.</p>
+    <div class="row">
+      <button id="gatePlay" class="primary">Play on this screen</button>
+      <button id="gateVr" hidden>Enter VR</button>
+    </div>
+    <small>Contains cartoon blood and gore.</small>
+  </div>
+</div>
+
+<button id="vr" hidden>Enter VR</button>
+<button id="lockHint" class="primary" hidden>Click to play</button>
+<div id="cross" hidden></div>
+<div id="tc" hidden>
+  <div id="stick" aria-label="Move"><div id="knob"></div></div>
+  <div id="tbtns">
+    <button id="tAtk">ATTACK</button>
+    <button id="tRun">SPRINT</button>
+    <button id="tSense">SENSE</button>
+  </div>
+  <button id="tMenu" aria-label="Menu">Menu</button>
+</div>
+
+<script type="module" src="./slasher/main.js"></script>
+</body>
+</html>
