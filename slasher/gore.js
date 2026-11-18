@@ -216,7 +216,14 @@ export function dripBlood(pos) {
 
 // ---------- body bits ----------
 const gibs = [], spurts = [], corpses = [], pools = [], guts = [], beats = [];
-function partOrigin(P, part) { return P[part] || P.torso; }
+function partOrigin(P, part) { const o = P[part]; return o && o.parent ? o : P.torso; }
+// After a part comes off, the body keeps harmless stand-ins so animation code never moves the flying piece.
+function standIns(P, name) {
+  const d = () => new THREE.Object3D();
+  if (name.startsWith('arm')) { const s = name.slice(3); P[name] = d(); P['elbow' + s] = d(); P['hand' + s] = d(); }
+  else if (name.startsWith('leg')) { P[name] = d(); P['knee' + name.slice(3)] = d(); }
+  else if (name === 'head') { P.head = d(); P.headMesh = null; P.mouth = null; }
+}
 function partCenter(P, part, out) {
   const o = partOrigin(P, part);
   if (part === 'head') out.set(0, 0.2, 0);
@@ -252,6 +259,7 @@ function detach(P, name, d, r, force = 1) {
   const parent = piv.parent, local = piv.position.clone();
   piv.updateMatrixWorld(true);
   root.attach(piv);
+  standIns(P, name);
   addGib(piv, new THREE.Vector3(d.x * (1.5 + r() * 2.5) * force + (r() - 0.5) * 1.5, 2 + r() * 3, d.z * (1.5 + r() * 2.5) * force + (r() - 0.5) * 1.5),
     new THREE.Vector3((r() - 0.5) * 14, (r() - 0.5) * 14, (r() - 0.5) * 14), 3);
   return { parent, local, piv };
@@ -358,6 +366,26 @@ export function hurtFX(char, part, dir) {
   spurts.push({ parent: o, local: w.position.clone(), axis: new THREE.Vector3(0, 0.2, -1).normalize(), t: 0.8, rate: 40 });
 }
 
+// Cut off an arm or leg on a living victim.
+export function severLimb(char, part, dir, seed) {
+  const P = char.userData.P;
+  if (!P[part] || !P[part].parent) return false;
+  const r = rng(seed | 0);
+  const d = new THREE.Vector3(dir[0], 0, dir[1]); if (d.lengthSq() < 1e-4) d.set(0, 0, 1); d.normalize();
+  char.updateMatrixWorld(true);
+  const at = partCenter(P, part, new THREE.Vector3());
+  const cut = detach(P, part, d, r, 1.1);
+  if (!cut) return false;
+  const arm = part.startsWith('arm');
+  stump(cut.parent, cut.local.x, cut.local.y, cut.local.z, 0.12, 0.06, !arm);
+  stump(cut.piv, 0, 0, 0, 0.12, 0.05, arm);
+  blood(at, TV.set(d.x, 0.3, d.z), 160, 3.4, 1.8, 1.8);
+  mist(at, 0.9, d);
+  splatFloor(at.x + d.x * 0.8, at.z + d.z * 0.8, 0.6);
+  spurts.push({ parent: cut.parent, local: cut.local.clone(), axis: arm ? new THREE.Vector3(Math.sign(cut.local.x) || 1, -0.3, 0).normalize() : new THREE.Vector3(0, -1, 0), t: 8, rate: 110, power: 2.4 });
+  return true;
+}
+
 // g: { part, dir:[x,z], seed }, W: weapon definition (or {id:'choke'|'stomp'|'fists'|'throw'})
 export function killFX(char, g, W) {
   const P = char.userData.P;
@@ -375,7 +403,7 @@ export function killFX(char, g, W) {
   else if (W.saw) style = g.part === 'head' ? 'decap' : limb ? 'limb' : 'halve';
   else if (W.impale) style = 'impale';
   else if (g.part === 'head') style = W.decap > 0 && r() < W.decap + 0.35 ? (id === 'axe' && r() < 0.45 ? 'split' : 'decap') : 'headwound';
-  else if (limb) style = W.decap > 0 && r() < 0.8 ? 'limb' : 'bleed';
+  else if (limb) style = W.decap > 0 ? 'limb' : 'bleed';
   else if (W.crush) style = 'cave';
   else if (W.decap > 0) style = r() < 0.45 && id !== 'cleaver' ? 'halve' : 'gut';
   else style = 'bleed';

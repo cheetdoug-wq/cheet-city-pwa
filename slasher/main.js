@@ -5,7 +5,7 @@ import { audioInit, sfx, setSaw, say } from './audio.js';
 import { LEVELS, MAPS, WEAPONS, WEAPON, MASKS, OUTFITS, SKINS, CAMPER_NAMES, VERBS, NAME_A, NAME_B } from './data.js';
 import { makeChar, animChar, makeWeapon, setWeaponBlood, makeFlashlight, makeBeamCone, makeTag, makeSense, makeGlove, makeBoot, killerLook, camperLook, npcLook, aiLook } from './models.js';
 import { getLayout, buildMap, buildMenu, buildSky, resolve, los, blocked, openPoint, mulberry } from './world.js';
-import { initGore, updateGore, killFX, hurtFX, clearGore, dripBlood, setGoreWorld, blood, mist } from './gore.js';
+import { initGore, updateGore, killFX, hurtFX, severLimb, clearGore, dripBlood, setGoreWorld, blood, mist } from './gore.js';
 
 // ---------- basics ----------
 const params = new URLSearchParams(location.search);
@@ -26,8 +26,8 @@ const UP = new THREE.Vector3(0, 1, 0);
 const TV = new THREE.Vector3(), TV2 = new THREE.Vector3(), TV3 = new THREE.Vector3(), TQ = new THREE.Quaternion(), TM = new THREE.Matrix4();
 const PARTS = ['head', 'torso', 'armL', 'armR', 'legL', 'legR'];
 const POSES = ['', 'flee', 'cower', 'attack', 'held', 'choke', 'down', 'hide'];
-const SPECIAL = { fists: { id: 'fists', dmg: 14, reach: 1.5, swing: 0.35 }, choke: { id: 'choke' }, stomp: { id: 'stomp', crush: true } };
-const SPECIAL_VERBS = { fists: 'beaten to death', choke: 'strangled', stomp: 'stomped to death' };
+const SPECIAL = { fists: { id: 'fists', dmg: 14, reach: 1.5, swing: 0.35 }, choke: { id: 'choke' }, stomp: { id: 'stomp', crush: true }, bleed: { id: 'bleed' } };
+const SPECIAL_VERBS = { fists: 'beaten to death', choke: 'strangled', stomp: 'stomped to death', bleed: 'left to bleed out' };
 const weaponDef = id => WEAPON[id] || SPECIAL[id] || WEAPON.machete;
 const LINES = {
   flee: ['Help!', 'Somebody help me!', 'Run!', 'Oh my god, run!', 'Get away from me!', "He's got a knife!", 'Help us!'],
@@ -110,7 +110,7 @@ function myRole() { return G.mode === 'play' ? G.me.role : look.role; }
 function refreshHeld() {
   for (const o of [vmItem, vrItem, vrGlove]) if (o) o.removeFromParent();
   const role = myRole();
-  const wid = G.mode === 'play' ? G.weapon : look.weapon;
+  const wid = G.mode === 'play' ? (G.holstered ? null : G.weapon) : look.weapon;
   if (role === 'killer' && wid) {
     vmItem = makeWeapon(wid); vmItem.rotation.set(0.95, 0.1, -0.15);
     vrItem = makeWeapon(wid); vrItem.rotation.set(-0.35, 0, 0);
@@ -136,6 +136,78 @@ function updateLights() {
   const play = G.mode === 'play';
   flash.intensity = play && G.me.role === 'camper' && G.flashOn && !G.me.dead ? 55 : 0;
   aura.intensity = play ? (G.me.role === 'killer' ? 5 : G.me.dead ? 4 : 1.2) : 0;
+}
+
+// ---------- your own body ----------
+// You see your own body when you look down. In VR the arms reach for your controllers (two-bone IK).
+let myBody = null, backItem = null;
+const IK_DOWN = new THREE.Vector3(0, -1, 0), IK_M = new THREE.Matrix4(), IK_S = new THREE.Vector3(), IK_H = new THREE.Vector3(), IK_E = new THREE.Vector3(), IK_D = new THREE.Vector3(), IK_N = new THREE.Vector3(), IK_Q = new THREE.Quaternion();
+function buildBody() {
+  if (myBody) myBody.removeFromParent();
+  myBody = makeChar(G.me.role === 'killer' ? killerLook(look) : camperLook(look));
+  myBody.userData.P.head.visible = false;
+  myBody.userData.yaw = G.yaw; myBody.userData.prev = G.head.clone();
+  scene.add(myBody);
+  refreshBack();
+}
+function removeBody() { if (myBody) myBody.removeFromParent(); myBody = null; backItem = null; }
+function refreshBack() {
+  if (backItem) backItem.removeFromParent();
+  backItem = null;
+  if (myBody && G.weapon && G.holstered) { backItem = makeWeapon(G.weapon); setWeaponBlood(backItem, G.blood); myBody.userData.P.back.add(backItem); }
+}
+function ikArm(P, side, target) {
+  const arm = P['arm' + side], elbow = P['elbow' + side];
+  P.torso.updateMatrixWorld(true);
+  IK_M.copy(P.torso.matrixWorld).invert();
+  IK_S.copy(arm.position);
+  IK_H.copy(target).applyMatrix4(IK_M);
+  const a = 0.28, b = 0.33;
+  IK_D.copy(IK_H).sub(IK_S);
+  const len = clamp(IK_D.length(), 0.08, a + b - 0.002);
+  IK_D.normalize();
+  const A = Math.acos(clamp((a * a + len * len - b * b) / (2 * a * len), -1, 1));
+  IK_N.set(side === 'L' ? -0.6 : 0.6, -1, 0.35).normalize();
+  IK_N.addScaledVector(IK_D, -IK_N.dot(IK_D)).normalize();
+  IK_E.copy(IK_S).addScaledVector(IK_D, Math.cos(A) * a).addScaledVector(IK_N, Math.sin(A) * a);
+  arm.quaternion.setFromUnitVectors(IK_DOWN, TV.copy(IK_E).sub(IK_S).normalize());
+  TV.copy(IK_D).multiplyScalar(len).add(IK_S).sub(IK_E).normalize().applyQuaternion(IK_Q.copy(arm.quaternion).invert());
+  elbow.quaternion.setFromUnitVectors(IK_DOWN, TV);
+}
+function updateBody(dt) {
+  if (!myBody) return;
+  const show = G.mode === 'play' && !G.me.dead;
+  myBody.visible = show;
+  if (!show) return;
+  const vr = renderer.xr.isPresenting, u = myBody.userData, P = u.P;
+  camera.getWorldDirection(TV);
+  const hy = Math.atan2(-TV.x, -TV.z);
+  const spd = Math.hypot(G.head.x - u.prev.x, G.head.z - u.prev.z) / Math.max(dt, 1e-3);
+  u.prev.copy(G.head);
+  u.spd = lerp(u.spd || 0, Math.min(spd, 6), 0.2);
+  // the body follows where you look, a little lazily, like real shoulders
+  let d = hy - u.yaw; d = Math.atan2(Math.sin(d), Math.cos(d));
+  if (u.spd > 0.4 || Math.abs(d) > 0.7) u.yaw += d * (1 - Math.exp(-dt * (u.spd > 0.4 ? 9 : 4)));
+  myBody.rotation.y = u.yaw;
+  const base = G.me.role === 'killer' ? 1.08 : 1;
+  const sc = (vr ? clamp(G.head.y / (1.72 * base), 0.55, 1.2) : 0.96) * base;
+  myBody.scale.setScalar(sc);
+  const back = vr ? 0.12 : 0.03;
+  myBody.position.set(G.head.x + Math.sin(u.yaw) * back * sc, 0, G.head.z + Math.cos(u.yaw) * back * sc);
+  animChar(myBody, u.spd, dt, '');
+  myBody.position.y = 0;
+  P.armL.visible = P.armR.visible = vr;
+  for (const o of P.torso.children) if (o.isMesh) o.visible = vr;
+  for (const o of P.hips.children) if (o.isMesh) o.visible = vr;
+  if (vr) { ikArm(P, 'L', handPos('L', TV3)); ikArm(P, 'R', handPos('R', TV3)); }
+}
+// Holstering: reach over your right shoulder and grip (VR), or press H.
+function holsterPoint(out) { if (myBody) { myBody.updateMatrixWorld(true); return myBody.userData.P.back.getWorldPosition(out); } return out.copy(G.head); }
+function setHolster(on) {
+  if (!G.weapon || G.holstered === on) return;
+  G.holstered = on; setSaw(0);
+  refreshHeld(); refreshBack();
+  sfx('clink', 0.6, on ? 0.8 : 1.1); buzz(handOf('right'), 0.7, 70);
 }
 
 // ---------- HUD (a small panel that floats in front of your face) ----------
@@ -257,7 +329,7 @@ function drawPlayTab() {
   const tip = renderer.xr.isPresenting
     ? 'Swing to attack · Grip grabs (trigger chokes) · Right grip drops/picks up weapons · X kick/stomp · A sense · Y menu'
     : TOUCH ? 'Left pad moves · Drag to look · Buttons attack, sprint and sense'
-    : 'WASD move · Shift sprint · Click attack · Right-click grab (hold to choke) · Q kick/stomp · G drop/pick up · T throw · F sense';
+    : 'WASD move · Click attack · Right-click grab/choke · Q kick/stomp · H holster · G drop/pick up · T throw · F sense';
   text(tip, 40, 742, 19, '#8f8480', 'left', 600);
   if (G.err) text(G.err, UIW - 40, 742, 20, '#ff6a6a', 'right', 700);
 }
@@ -353,8 +425,8 @@ function drawPause() {
   btn(440, G.role === 'host' ? 460 : 340, 400, 100, G.role === 'solo' ? 'QUIT TO MENU' : G.role === 'host' ? 'CLOSE SERVER' : 'LEAVE SERVER',
     () => { if (G.role === 'solo') backToMenu(); else leaveServer(''); }, { size: 28 });
   const lines = renderer.xr.isPresenting
-    ? ['Swing to attack (hold the trigger to rev a chainsaw). Grip a camper to grab them, squeeze the trigger to choke.', 'Right grip drops, throws or picks up weapons. X kicks or stomps. Click the left stick to sprint. A senses victims.']
-    : ['Click to attack. Hold right-click on a camper to grab and choke them. Q kicks, or stomps someone on the ground.', 'G drops or picks up a weapon, T throws it. F senses victims (or toggles a camper\'s flashlight).'];
+    ? ['Swing to attack (hold the trigger to rev a chainsaw). Grip a camper to grab them, squeeze the trigger to choke.', 'Reach over your right shoulder and grip to holster or draw. Right grip elsewhere drops or throws. X kicks or stomps.']
+    : ['Click to attack. Hold right-click on a camper to grab and choke them. Q kicks, or stomps someone on the ground.', 'G drops or picks up a weapon, T throws it, H holsters it on your back. F senses victims.'];
   lines.forEach((l, i) => text(l, UIW / 2, 640 + i * 36, 22, '#bfb0aa', 'center', 600));
   if (G.role !== 'solo') text('The game keeps running for everyone else while this is open.', UIW / 2, 730, 19, '#8f8480', 'center', 600);
 }
@@ -597,7 +669,7 @@ function onGameMsg(m) {
       removePickup(m.id);
       if (m.by === G.myId) {
         if (G.weapon) dropWeapon(TV.set(0, 1, 0));
-        G.weapon = m.w; refreshHeld(); sfx('clink'); buzz(handOf('right'), 0.6, 60);
+        G.weapon = m.w; G.holstered = false; refreshHeld(); refreshBack(); sfx('clink'); buzz(handOf('right'), 0.6, 60);
       }
       break;
     }
@@ -699,6 +771,7 @@ function roundSnapshot(forId) {
   return m;
 }
 function clearRound() {
+  removeBody();
   for (const id of [...G.ents.keys()]) removeEnt(id);
   while (charsGroup.children.length) charsGroup.children[0].removeFromParent();
   clearGore();
@@ -738,7 +811,8 @@ function enterRound(m) {
   G.me = { hp: 100, dead: false, stamina: 6, role: mine[3], swingT: 0, hitDone: true, senseT: 0, senseCD: 0, exhausted: false };
   const mp = G.players.get(G.myId); if (mp) mp.rr = mine[3];
   G.blood = 0; G.flashOn = true; G.splatA = 0;
-  G.weapon = G.me.role === 'killer' ? look.weapon : null;
+  G.weapon = G.me.role === 'killer' ? look.weapon : null; G.holstered = false;
+  buildBody();
   placeRig(mine[0], mine[1], mine[2]);
   refreshHeld();
   hud.visible = true;
@@ -802,11 +876,22 @@ function hostHit(id, part, dmg, dir, w, by) {
   } else {
     const e = G.ents.get(id);
     if (!e || e.dead || e.role !== 'camper') return;
-    e.hp -= dmg; alive = e.hp > 0;
+    e.hp -= dmg; alive = e.hp > 0; e.lastHitBy = by;
     if (e.ai && alive && e.ai.state !== 'held' && e.ai.state !== 'down') panic(e, by, part);
   }
   const d = [r2((dir && dir[0]) || 0), r2((dir && dir[1]) || 0)];
-  if (alive) broadcastAll({ t: 'hurt', id, part, dir: d, w });
+  // A blade on an arm or leg can take it clean off without killing.
+  let sev = 0;
+  const W = WEAPON[w];
+  if (alive && id !== G.myId && W && (W.decap > 0 || W.saw) && /^(arm|leg)/.test(part)) {
+    const e = G.ents.get(id);
+    e.lost = e.lost || new Set();
+    if (!e.lost.has(part) && (W.saw || dmg >= 34) && Math.random() < 0.8) {
+      sev = 1; e.lost.add(part); e.bleed = (e.bleed || 0) + 1;
+      if (part.startsWith('leg')) { e.legless = true; if (e.ai && !e.heldBy) { e.ai.state = 'down'; e.ai.t = 1e9; e.ai.vx = d[0] * 1.5; e.ai.vz = d[1] * 1.5; e.pose = 6; } }
+    }
+  }
+  if (alive) broadcastAll({ t: 'hurt', id, part, dir: d, w, sev, seed: (Math.random() * 1e9) | 0 });
   else broadcastAll({ t: 'kill', id, by, part, dir: d, w, seed: (Math.random() * 1e9) | 0 });
 }
 function posOf(id) {
@@ -883,7 +968,12 @@ function onHurt(m) {
   }
   const e = G.ents.get(m.id);
   if (!e || e.dead) return;
-  hurtFX(e.char, m.part, m.dir);
+  if (m.sev && severLimb(e.char, m.part, m.dir, m.seed)) {
+    e.lost = e.lost || new Set(); e.lost.add(m.part);
+    if (m.part.startsWith('leg')) e.legless = true;
+    sfxAt('squelch', e.x, e.z); sfxAt('scream', e.x, e.z, 1, voiceOf(e));
+    feed(`${e.name} lost ${m.part.startsWith('arm') ? 'an arm' : 'a leg'}!`);
+  } else hurtFX(e.char, m.part, m.dir);
   e.wounded = true;
   sfxAt(m.w === 'fists' || m.w === 'stomp' ? 'punch' : 'hit', e.x, e.z);
   sfxAt('pain', e.x, e.z, 1, voiceOf(e));
@@ -956,18 +1046,24 @@ function steer(e, wx, wz, dt, speed) {
     let best = -1e9, bx = wx, bz = wz;
     for (let i = 0; i < 16; i++) {
       const a = (i / 16) * Math.PI * 2, dx = Math.cos(a), dz = Math.sin(a);
-      let s = dx * wx + dz * wz + (dx * ai.dx + dz * ai.dz) * 0.35;
+      let s = dx * wx + dz * wz + (dx * (ai.tdx ?? ai.dx) + dz * (ai.tdz ?? ai.dz)) * 0.6;
       if (blocked(L, e.x + dx * 1.2, e.z + dz * 1.2, 0.35)) s -= 3;
       else if (blocked(L, e.x + dx * 3, e.z + dz * 3, 0.35)) s -= 1.1;
       if (s > best) { best = s; bx = dx; bz = dz; }
     }
-    ai.dx = bx; ai.dz = bz;
+    ai.tdx = bx; ai.tdz = bz;
   }
+  // turn toward the chosen direction smoothly instead of snapping (no more jitter)
+  const kt = 1 - Math.exp(-dt * 7);
+  ai.dx += ((ai.tdx ?? ai.dx) - ai.dx) * kt; ai.dz += ((ai.tdz ?? ai.dz) - ai.dz) * kt;
+  const dl = Math.hypot(ai.dx, ai.dz) || 1; ai.dx /= dl; ai.dz /= dl;
+  // ease into the target speed
+  ai.spd = (ai.spd || 0) + (speed - (ai.spd || 0)) * (1 - Math.exp(-dt * 4)); speed = ai.spd;
   const p = { x: e.x + ai.dx * speed * dt, z: e.z + ai.dz * speed * dt };
   resolve(L, p, 0.3);
-  e.speed = Math.hypot(p.x - e.x, p.z - e.z) / Math.max(dt, 1e-3);
+  e.speed = lerp(e.speed, Math.hypot(p.x - e.x, p.z - e.z) / Math.max(dt, 1e-3), 0.3);
   e.x = p.x; e.z = p.z;
-  if (e.speed > 0.2) e.yaw = angLerp(e.yaw, Math.atan2(-ai.dx, -ai.dz), 1 - Math.exp(-dt * 8));
+  if (e.speed > 0.2) e.yaw = angLerp(e.yaw, Math.atan2(-ai.dx, -ai.dz), 1 - Math.exp(-dt * 6));
 }
 function pickWander(e, away) {
   const L = world.layout;
@@ -1020,6 +1116,7 @@ function updateCamperAI(e, dt, lvl, killers) {
     const hidden = ai.state === 'hide';
     ai.sees = kd < (hidden ? 3 : 4) || (!hidden && kd < lvl.sight && (facing > -0.3 || kd < 7) && los(world.layout, e.x, e.z, kx, kz)) || (hidden && kd < 6 && los(world.layout, e.x, e.z, kx, kz));
   }
+  if (e.legless && ai.state !== 'down') { ai.state = 'down'; ai.t = 1e9; ai.vx = ai.vz = 0; }
   if (ai.state === 'down') {
     // knocked flat: slide, then scoot backwards away from the killer, then scramble up and run
     e.pose = 6; ai.t -= dt;
@@ -1031,7 +1128,8 @@ function updateCamperAI(e, dt, lvl, killers) {
       e.yaw = angLerp(e.yaw, Math.atan2(ax / l, az / l), dt * 4);
     }
     resolve(world.layout, p, 0.3); e.x = p.x; e.z = p.z; e.speed = 0.5; e.y = Math.max(0, (e.y || 0) - dt * 3);
-    if (ai.t <= 0) { ai.state = 'flee'; ai.kx = kx; ai.kz = kz; ai.lastSeen = G.now; ai.stamina = Math.max(ai.stamina, 2); e.pose = 1; }
+    if (e.legless) ai.t = 1e9;
+    else if (ai.t <= 0) { ai.state = 'flee'; ai.kx = kx; ai.kz = kz; ai.lastSeen = G.now; ai.stamina = Math.max(ai.stamina, 2); e.pose = 1; }
     return;
   }
   if (ai.sees) {
@@ -1053,7 +1151,7 @@ function updateCamperAI(e, dt, lvl, killers) {
       if (ai.wx === null) pickWander(e);
       const dx = ai.wx - e.x, dz = ai.wz - e.z, d = Math.hypot(dx, dz);
       if (d < 1.2) { ai.state = 'idle'; ai.t = 2 + Math.random() * 6; ai.wx = null; break; }
-      steer(e, dx / d, dz / d, dt, 1.3 * spdMul);
+      steer(e, dx / d, dz / d, dt, 1.15 * spdMul);
       break;
     }
     case 'flee': {
@@ -1061,7 +1159,7 @@ function updateCamperAI(e, dt, lvl, killers) {
       let ax = e.x - ai.kx, az = e.z - ai.kz; const l = Math.hypot(ax, az) || 1; ax /= l; az /= l;
       const sprint = ai.stamina > 0;
       if (sprint) ai.stamina -= dt;
-      steer(e, ax, az, dt, (sprint ? 4.6 : 2.4) * spdMul);
+      steer(e, ax, az, dt, (sprint ? 3.7 : 2.0) * spdMul);
       if (!sprint && kd < 2.6 && Math.random() < dt * 0.6) { ai.state = 'cower'; ai.t = 1.2 + Math.random() * 1.2; e.pose = 2; }
       // out of sight for a moment: look for somewhere to hide
       if (G.now - ai.lastSeen > 2.5 && kd > 9) {
@@ -1078,9 +1176,9 @@ function updateCamperAI(e, dt, lvl, killers) {
       if (ai.step === 0 && d < 0.9) ai.step = 1;
       else if (ai.step === 1 && d < 0.5 || ai.t <= 0) { ai.state = 'hide'; ai.t = 20 + Math.random() * 20; e.pose = 7; e.speed = 0; break; }
       if (ai.step === 1 && d < 3) { // the last few steps are direct, through doorways
-        const p = { x: e.x + (dx / d) * 3 * dt, z: e.z + (dz / d) * 3 * dt }; resolve(world.layout, p, 0.25);
-        e.speed = 3; e.x = p.x; e.z = p.z; e.yaw = angLerp(e.yaw, Math.atan2(-dx, -dz), dt * 8);
-      } else steer(e, dx / d, dz / d, dt, 3.6 * spdMul);
+        const p = { x: e.x + (dx / d) * 2.4 * dt, z: e.z + (dz / d) * 2.4 * dt }; resolve(world.layout, p, 0.25);
+        e.speed = 2.4; e.x = p.x; e.z = p.z; e.yaw = angLerp(e.yaw, Math.atan2(-dx, -dz), dt * 8);
+      } else steer(e, dx / d, dz / d, dt, 3.2 * spdMul);
       break;
     }
     case 'hide':
@@ -1150,7 +1248,7 @@ function updateKillerAI(e, dt, lvl) {
     sfxAt('swing', e.x, e.z);
     return;
   }
-  if (tgt || (ai.hunting && d > 1.5)) { steer(e, dx / d, dz / d, dt, (tgt ? 4.0 : 3.0) * lvl.speed); if (!tgt && d < 2) ai.hunting = false; }
+  if (tgt || (ai.hunting && d > 1.5)) { steer(e, dx / d, dz / d, dt, (tgt ? 3.5 : 2.6) * lvl.speed); if (!tgt && d < 2) ai.hunting = false; }
   else {
     if (ai.wx === null || Math.hypot(ai.wx - e.x, ai.wz - e.z) < 1.5) pickWander(e);
     steer(e, (ai.wx - e.x) / (Math.hypot(ai.wx - e.x, ai.wz - e.z) || 1), (ai.wz - e.z) / (Math.hypot(ai.wx - e.x, ai.wz - e.z) || 1), dt, 2.3 * lvl.speed);
@@ -1164,6 +1262,10 @@ function hostSim(dt) {
   for (const e of G.ents.values()) {
     if (!e.ai || e.dead) continue;
     if (e.heldBy) updateHeld(e, dt);
+    if (e.bleed && !e.dead && e.role === 'camper') {
+      e.hp -= 2.2 * e.bleed * dt;
+      if (e.hp <= 0) broadcastAll({ t: 'kill', id: e.id, by: e.lastHitBy || 'ai', part: 'torso', dir: [0, 1], w: 'bleed', seed: (Math.random() * 1e9) | 0 });
+    }
     if (e.dead) continue;
     if (e.role === 'camper') updateCamperAI(e, dt, lvl, killers); else updateKillerAI(e, dt, lvl);
     npcs.push(e);
@@ -1171,7 +1273,7 @@ function hostSim(dt) {
   for (let i = 0; i < npcs.length; i++) for (let j = i + 1; j < npcs.length; j++) {
     const a = npcs[i], b = npcs[j], dx = b.x - a.x, dz = b.z - a.z, d2 = dx * dx + dz * dz;
     if (a.heldBy || b.heldBy) continue;
-    if (d2 < 0.36 && d2 > 1e-6) { const d = Math.sqrt(d2), k = (0.6 - d) / d * 0.5; a.x -= dx * k; a.z -= dz * k; b.x += dx * k; b.z += dz * k; }
+    if (d2 < 0.36 && d2 > 1e-6) { const d = Math.sqrt(d2), k = Math.min(dt * 4, 1) * (0.6 - d) / d * 0.5; a.x -= dx * k; a.z -= dz * k; b.x += dx * k; b.z += dz * k; }
   }
   if (campersAlive() === 0 || (G.role === 'solo' && G.me.role === 'camper' && G.me.dead && G.now - G.me.deadAt > 2.5)) endRound('killers');
   else if (G.timeLeft <= 0) endRound('campers');
@@ -1229,7 +1331,7 @@ function moveLocal(dt) {
   if (me.dead) speed = 4.5;
   else if (me.role === 'killer') { if (sprint && moving) speed = 4.4; }
   else {
-    if (sprint && moving && !me.exhausted) { speed = 5.2; me.stamina -= dt; if (me.stamina <= 0) { me.stamina = 0; me.exhausted = true; } }
+    if (sprint && moving && !me.exhausted) { speed = 4.6; me.stamina -= dt; if (me.stamina <= 0) { me.stamina = 0; me.exhausted = true; } }
     else { me.stamina = Math.min(6, me.stamina + dt * 0.6); if (me.stamina > 1.5) me.exhausted = false; }
   }
   const p = { x: G.head.x + (fx * mz + rx * mx) * speed * dt, z: G.head.z + (fz * mz + rz * mx) * speed * dt };
@@ -1263,7 +1365,7 @@ function hitPart(p, t) {
   if (y > 0.9 - crouch * 0.5) return Math.abs(side) > 0.2 ? (side < 0 ? 'armL' : 'armR') : 'torso';
   return side < 0 ? 'legL' : 'legR';
 }
-function curWeapon() { return G.weapon ? WEAPON[G.weapon] : SPECIAL.fists; }
+function curWeapon() { return G.weapon && !G.holstered ? WEAPON[G.weapon] : SPECIAL.fists; }
 function doHit(id, part, dmg, dir, w) {
   w = w || G.weapon || 'fists';
   if (G.role === 'client') G.net.send({ t: 'hit', id, part, dmg: Math.round(dmg), dir: [r2(dir[0]), r2(dir[1])], w });
@@ -1475,11 +1577,15 @@ function tryTake(p, maxD) {
 }
 function dropWeapon(vel) {
   if (!G.weapon) return;
-  const item = renderer.xr.isPresenting ? vrItem : vmItem;
+  const item = G.holstered && backItem ? backItem : renderer.xr.isPresenting ? vrItem : vmItem;
   item.getWorldPosition(TV3); item.getWorldQuaternion(TQ);
+  if (!renderer.xr.isPresenting && !G.holstered && vel.length() > 6) {
+    // a hard throw on a flat screen leaves from the middle of your view, so it flies where you aim
+    camera.getWorldPosition(TV3); camera.getWorldDirection(TV2); TV3.addScaledVector(TV2, 0.6); TV3.y -= 0.12;
+  }
   const eu = new THREE.Euler().setFromQuaternion(TQ);
   const m = { t: 'drop', w: G.weapon, p: [r2(TV3.x), r2(TV3.y), r2(TV3.z)], r: [r2(eu.x), r2(eu.y), r2(eu.z)], v: [r2(vel.x), r2(vel.y), r2(vel.z)] };
-  G.weapon = null; setSaw(0); refreshHeld();
+  G.weapon = null; G.holstered = false; setSaw(0); refreshHeld(); refreshBack();
   sfx('swing', 0.5, 0.8);
   if (G.role === 'client') G.net.send(m); else hostDrop(m, G.myId);
 }
@@ -1539,8 +1645,11 @@ function combatLocal(dt) {
     if (edge('lg', VR.lgrip) && !G.hold.L) tryGrab('L');
     if (!VR.lgrip && G.hold.L) releaseHold('L', G.handVel.L);
     setChoke('L', !!G.hold.L && VR.ltrig);
+    const nearBack = handPos('R', TV3).distanceTo(holsterPoint(TV)) < 0.32;
+    if (nearBack !== G.nearBack) { G.nearBack = nearBack; if (nearBack && G.weapon) buzz(handOf('right'), 0.25, 30); }
     if (edge('rg', VR.rgrip) && !G.hold.R) {
-      if (G.weapon) dropWeapon(G.handVel.R.clone().multiplyScalar(1.3));
+      if (G.weapon && nearBack) setHolster(!G.holstered);
+      else if (G.weapon && !G.holstered) dropWeapon(G.handVel.R.clone().multiplyScalar(1.3));
       else if (!tryTake(handPos('R', new THREE.Vector3()), 0.45)) tryGrab('R');
     }
     if (!VR.rgrip && G.hold.R) releaseHold('R', G.handVel.R);
@@ -1559,8 +1668,9 @@ function combatLocal(dt) {
       if (G.hold.L) releaseHold('L', TV.copy(TV2).multiplyScalar(7).add(TV3.set(0, 2, 0)));
       else tryKick();
     }
-    if (E.item) { if (G.weapon) dropWeapon(TV.copy(TV2).multiplyScalar(2.5).add(TV3.set(0, 1, 0))); else tryTake(lookPoint(new THREE.Vector3()), 1.8); }
-    if (E.throwW && G.weapon) dropWeapon(TV.copy(TV2).multiplyScalar(15).add(TV3.set(0, 1.5, 0)));
+    if (E.item) { if (G.weapon && !G.holstered) dropWeapon(TV.copy(TV2).multiplyScalar(2.5).add(TV3.set(0, 1, 0))); else tryTake(lookPoint(new THREE.Vector3()), 1.8); }
+    if (E.holster) setHolster(!G.holstered);
+    if (E.throwW && G.weapon && !G.holstered) dropWeapon(TV.copy(TV2).multiplyScalar(15).add(TV3.set(0, 1.5, 0)));
   }
   const W = curWeapon();
   if (vr) { swingHand(dt, 'R', vrItem, W); if (!G.hold.L) swingHand(dt, 'L', vrGlove, SPECIAL.fists); }
@@ -1608,7 +1718,9 @@ function updateEnts(dt) {
       e.held = e.wi >= 0 && WEAPONS[e.wi] ? makeWeapon(WEAPONS[e.wi].id) : null;
       if (e.held) c.userData.P.handR.add(e.held);
     }
-    if (e.held) {
+    if (e.held && e.flags & 16) {
+      if (e.held.parent !== c.userData.P.back) { c.userData.P.back.add(e.held); e.held.position.set(0, 0, 0); e.held.quaternion.identity(); }
+    } else if (e.held) {
       if (e.hand) {
         if (e.held.parent !== charsGroup) charsGroup.add(e.held);
         e.held.position.lerp(TV.set(e.hand[0], e.hand[1], e.hand[2]), k);
@@ -1643,7 +1755,7 @@ function updateEnts(dt) {
 function myState() {
   camera.getWorldDirection(TV);
   const yaw = Math.atan2(-TV.x, -TV.z), pitch = Math.asin(clamp(TV.y, -1, 1));
-  const flags = (G.me.dead ? 1 : 0) | (G.me.swingT > 0 ? 2 : 0) | (G.me.role === 'camper' && G.flashOn ? 8 : 0);
+  const flags = (G.me.dead ? 1 : 0) | (G.me.swingT > 0 ? 2 : 0) | (G.me.role === 'camper' && G.flashOn ? 8 : 0) | (G.holstered ? 16 : 0);
   const a = [r2(G.head.x), r2(G.head.y), r2(G.head.z), r2(yaw), r2(pitch), flags, G.weapon ? WEAPONS.findIndex(w => w.id === G.weapon) : -1];
   const gk = G.hold.L ? 'L' : G.hold.R ? 'R' : null;
   if (gk) { handPos(gk, TV2); a.push(r2(TV2.x), r2(TV2.y), r2(TV2.z)); } else a.push(0, 0, 0);
@@ -1732,7 +1844,7 @@ const VR = { mx: 0, my: 0, turn: 0, sprint: false, trigger: false, a: false, ly:
 addEventListener('keydown', e => {
   K[e.code] = true;
   if (e.code === 'KeyF') EQ.sense = true;
-  if (!e.repeat) { if (e.code === 'KeyQ') EQ.kick = true; if (e.code === 'KeyG') EQ.item = true; if (e.code === 'KeyT') EQ.throwW = true; }
+  if (!e.repeat) { if (e.code === 'KeyQ') EQ.kick = true; if (e.code === 'KeyG') EQ.item = true; if (e.code === 'KeyT') EQ.throwW = true; if (e.code === 'KeyH' || e.code === 'Digit1') EQ.holster = true; }
   if (e.code === 'KeyP' || e.code === 'Tab') { e.preventDefault(); EQ.pause = true; }
   if (G.mode === 'menu' && G.tab === 'mp' && !G.net) {
     const m = /^(Digit|Numpad)(\d)$/.exec(e.code);
@@ -1804,6 +1916,7 @@ hold('tSense', () => { EQ.sense = true; }, () => {});
 hold('tGrab', () => { T.grab = true; }, () => { T.grab = false; });
 hold('tKick', () => { EQ.kick = true; }, () => {});
 hold('tItem', () => { EQ.item = true; }, () => {});
+hold('tHolster', () => { EQ.holster = true; }, () => {});
 hold('tMenu', () => { EQ.pause = true; }, () => {});
 
 function pollXR() {
@@ -1826,8 +1939,8 @@ function gatherInput() {
   E.sense = EQ.sense || (vr && edge('a', VR.a));
   E.pause = EQ.pause || (vr && edge('y', VR.ly));
   E.flashToggle = vr && G.me.role === 'camper' && trig;
-  E.kick = EQ.kick; E.item = EQ.item; E.throwW = EQ.throwW;
-  EQ.kick = EQ.item = EQ.throwW = false;
+  E.kick = EQ.kick; E.item = EQ.item; E.throwW = EQ.throwW; E.holster = EQ.holster;
+  EQ.kick = EQ.item = EQ.throwW = EQ.holster = false;
   H.attack = (H.mouse && document.pointerLockElement === canvas) || T.attack || (vr && VR.trigger);
   EQ.attack = EQ.sense = EQ.pause = false;
 }
@@ -1876,7 +1989,7 @@ function updateDom() {
   cross.hidden = !(playing && (locked || TOUCH));
   tc.hidden = !(playing && TOUCH);
   $('tSense').textContent = G.me.role === 'camper' ? 'LIGHT' : 'SENSE';
-  for (const id of ['tAtk', 'tGrab', 'tKick', 'tItem']) $(id).hidden = G.me.role === 'camper';
+  for (const id of ['tAtk', 'tGrab', 'tKick', 'tItem', 'tHolster']) $(id).hidden = G.me.role === 'camper';
 }
 lockHint.addEventListener('click', () => { audioInit(); try { const p = canvas.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (e) {} });
 
@@ -1923,6 +2036,7 @@ function frame() {
   } else {
     if (E.pause) { if (uiScreen === 'pause') resume(); else if (!uiScreen) openPause(); }
     moveLocal(dt);
+    updateBody(dt);
     if (!G.paused) {
       combatLocal(dt);
       if (G.role !== 'client' && G.phase === 'playing') hostSim(dt);

@@ -111,6 +111,9 @@ export function makeChar(L) {
     P[s < 0 ? 'armL' : 'armR'] = arm; P[s < 0 ? 'elbowL' : 'elbowR'] = elbow; P[s < 0 ? 'handL' : 'handR'] = hand;
   }
 
+  // back holster: grip over the right shoulder, blade hanging down toward the left hip
+  const back = new THREE.Group(); back.position.set(0.14, 0.52, 0.17); back.rotation.z = -0.5; torso.add(back);
+  const backIn = new THREE.Group(); backIn.rotation.x = -Math.PI / 2; back.add(backIn); P.back = backIn;
   const neck = new THREE.Group(); neck.position.set(0, 0.59, 0); torso.add(neck); P.head = neck;
   const hp = new Piece().add('box', skin, 0.1, 0.08, 0.1, 0, 0.03, 0).add('box', skin, 0.24, 0.27, 0.25, 0, 0.2, 0);
   if (killer) addMask(hp, L.mask);
