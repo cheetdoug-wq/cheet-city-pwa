@@ -53,6 +53,12 @@ Meta's current official packaging guide: https://developers.meta.com/vr/document
 - Cutscenes: an intro flyover on first launch, a pre-flight shot the first time you board the helicopter, and an arrivals shot the first time you visit the viewing deck. Skip with the button, Esc, Space or a click. They never play in VR.
 - Settings (button or O key): look sensitivity, field of view, invert look, mouse lock, and VR calibration (gun grip angle, snap-turn angle, smooth-turn speed, height adjust, seated play). The VR menu (left Y) has the same calibration plus "Recalibrate body height".
 
+## Performance (why it ran at ~1 frame per second)
+- The game was drawing about 9 million triangles every frame: every building detail in the whole city, including everything behind you, because instanced meshes in this Three.js version have off-screen culling turned off by default. That is now switched on, and building details are grouped so distant ones really are skipped.
+- About 24,000 shop items were drawn everywhere at high detail, and again for shadows. Now only items in shops near you are drawn, with simpler shapes and no shadows.
+- Quest, Android and other phones/tablets automatically get a lighter mode: no real-time shadows, simpler lighting, no extra point lights, simpler windows and railings, shorter detail distance and closer fog. The start view went from 9.2 million to about 0.9 million triangles, and from about 2,800 to about 370 draw calls.
+- Add ?quality=high or ?quality=low to the page address to force a mode.
+
 ## Bugs fixed in this version
 - Shop items west of x=-220 or east of x=220 snapped back to the shelf as soon as they were touched.
 - CHEETMART and its car park were built on top of West Ave; people walked through its walls.

@@ -183,7 +183,12 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,xrCapableBrowser?1.2:
 renderer.outputEncoding=THREE.sRGBEncoding;
 renderer.toneMapping=THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure=1.0;
-renderer.shadowMap.enabled=true;
+// Headsets and phones get a lighter mode: no real-time shadows, shorter draw distance, people far away update less often.
+// Add ?quality=high or ?quality=low to the address to force one.
+const QQ=(new URLSearchParams(location.search).get('quality')||'').toLowerCase();
+const LOWEND=QQ==='low'||(QQ!=='high'&&/OculusBrowser|Quest|Pico|Android|Mobile|iPhone|iPad|CrOS/i.test(navigator.userAgent));
+if(LOWEND)renderer.setPixelRatio(1);
+renderer.shadowMap.enabled=!LOWEND;
 renderer.shadowMap.type=THREE.PCFSoftShadowMap;
 const scene=new THREE.Scene();
 const camera=new THREE.PerspectiveCamera(55,1,0.05,1200);
@@ -285,7 +290,10 @@ function facadeTex(wall,trim,glass){
 }
 
 /* ================= materials ================= */
-const std=(o)=>new THREE.MeshStandardMaterial(Object.assign({roughness:0.8,metalness:0},o));
+// low mode: simple per-vertex lighting (much cheaper on a headset or phone GPU than the physically based material)
+const std=LOWEND?(o)=>{const q=Object.assign({},o),rgh=q.roughness==null?0.8:q.roughness,mtl=q.metalness||0;delete q.roughness;delete q.metalness;delete q.bumpMap;delete q.bumpScale;
+    const m=new THREE.MeshLambertMaterial(q);m.roughness=rgh;m.metalness=mtl;return m;}
+  :(o)=>new THREE.MeshStandardMaterial(Object.assign({roughness:0.8,metalness:0},o));
 const M={
   trimCream:std({color:0xe2dbcd,roughness:0.7}),trimGray:std({color:0xb8b6b0,roughness:0.75}),
   trimWhite:std({color:0xf0eee8,roughness:0.7}),trimDark:std({color:0x5c5751,roughness:0.75}),
@@ -390,11 +398,11 @@ function priceOf(kind,type){
 /* instanced batching */
 const BATCH=new Map();
 const _m=new THREE.Matrix4(),_q=new THREE.Quaternion(),_e=new THREE.Euler(),_p=new THREE.Vector3(),_s=new THREE.Vector3();
-const UB=new THREE.BoxGeometry(1,1,1),UC=new THREE.CylinderGeometry(1,1,1,18),US=new THREE.SphereGeometry(1,14,10),UCone=new THREE.ConeGeometry(1,1,18,1,true);
-let LAYER='ext';const LCH={ext:210,det:100,int:44},LDIST={ext:320,det:80,int:62};
+const UB=new THREE.BoxGeometry(1,1,1),UC=new THREE.CylinderGeometry(1,1,1,12),US=new THREE.SphereGeometry(1,LOWEND?7:10,LOWEND?5:7),UCone=new THREE.ConeGeometry(1,1,18,1,true);
+let LAYER='ext';const LCH={ext:96,det:48,int:44},LDIST=LOWEND?{ext:125,det:45,int:36}:{ext:300,det:80,int:58};
 function place(geo,mat,x,y,z,sx,sy,sz,rx,ry,rz){
   _e.set(rx||0,ry||0,rz||0,'YXZ');_q.setFromEuler(_e);_p.set(x,y,z);_s.set(sx,sy,sz);_m.compose(_p,_q,_s).premultiply(CTX.m);
-  const e=_m.elements,cs=LCH[LAYER],mk=matKey(mat),k=geo.uuid+mk+LAYER+Math.floor(e[12]/cs)+','+Math.floor(e[14]/cs);
+  const big=Math.max(Math.abs(sx),Math.abs(sy),Math.abs(sz))>12,e=_m.elements,cs=LCH[LAYER]*(big?3:1),mk=matKey(mat),k=geo.uuid+mk+LAYER+(big?'B':'')+Math.floor(e[12]/cs)+','+Math.floor(e[14]/cs);
   let b=BATCH.get(k);if(!b){b={geo,mat,mk,layer:LAYER,list:[],cols:mat.userData.plainKey?[]:null};BATCH.set(k,b);}b.list.push(_m.clone());if(b.cols)b.cols.push(mat.color);
 }
 const box=(mat,x,y,z,w,h,d,rx,ry,rz)=>place(UB,mat,x,y,z,w,h,d,rx,ry,rz);
@@ -417,13 +425,20 @@ function flushBatches(){BATCH.forEach(b=>{
   const geo=b.geo.clone(),c=V((x0+x1)/2,(y0+y1)/2,(z0+z1)/2);geo.boundingSphere=new THREE.Sphere(c,Math.hypot(x1-x0,y1-y0,z1-z0)/2+ms);
   let mat=b.mat;if(b.cols){mat=PLAINMAT[b.mk]||(PLAINMAT[b.mk]=std({roughness:b.mat.roughness,metalness:b.mat.metalness}));mat.userData.noCast=b.mat.userData.noCast;}
   const im=new THREE.InstancedMesh(geo,mat,b.list.length);b.list.forEach((m,i)=>im.setMatrixAt(i,m));if(b.cols){b.cols.forEach((c,i)=>im.setColorAt(i,c));if(im.instanceColor)im.instanceColor.needsUpdate=true;}
-  im.castShadow=!mat.userData.noCast&&b.layer!=='int';im.receiveShadow=true;im.userData.layer=b.layer;im.userData.c=c;im.userData.r=geo.boundingSphere.radius;scene.add(im);CHUNKS.push(im);});BATCH.clear();}
+  // three r128 turns culling OFF for instanced meshes by default, so every chunk was drawn every frame, even behind you; each chunk has its own bounds, so switch it back on
+  im.frustumCulled=true;im.castShadow=!mat.userData.noCast&&b.layer!=='int';im.receiveShadow=true;im.userData.layer=b.layer;im.userData.c=c;im.userData.r=geo.boundingSphere.radius;scene.add(im);CHUNKS.push(im);});BATCH.clear();}
 function updateChunks(px,pz){CHUNKS.forEach(im=>{const u=im.userData,dx=u.c.x-px,dz=u.c.z-pz,r=LDIST[u.layer]+u.r;im.visible=dx*dx+dz*dz<r*r;});
-  PUTS.forEach(m=>{const dx=m.position.x-px,dz=m.position.z-pz;m.visible=dx*dx+dz*dz<22500;});}
+  const pd=LOWEND?4900:22500;PUTS.forEach(m=>{const dx=m.position.x-px,dz=m.position.z-pz;m.visible=dx*dx+dz*dz<pd;});}
 // per-instance coloured parts (products, books, clothes, fruit)
 const CBOX=[],CSPH=[];
 function cinst(list,x,y,z,sx,sy,sz,c){_q.identity();_p.set(x,y,z);_s.set(sx,sy,sz);_m.compose(_p,_q,_s).premultiply(CTX.m);list.push([_m.clone(),c]);}
-function flushColor(){[[UB,CBOX],[US,CSPH]].forEach(([geo,list])=>{if(!list.length)return;const im=new THREE.InstancedMesh(geo,std({roughness:0.65}),list.length);const col=new THREE.Color();list.forEach(([m,c],i)=>{im.setMatrixAt(i,m);col.set(c);im.setColorAt(i,col);});if(im.instanceColor)im.instanceColor.needsUpdate=true;im.castShadow=im.receiveShadow=true;scene.add(im);});}
+// coloured shop goods are grouped by area (like the building chunks) so only nearby, on-screen ones are drawn
+function flushColor(){const mat=std({roughness:0.65}),cell=40;[[UB,CBOX],[US,CSPH]].forEach(([geo,list])=>{const groups=new Map();
+  list.forEach(it=>{const e=it[0].elements,k=Math.floor(e[12]/cell)+','+Math.floor(e[14]/cell);if(!groups.has(k))groups.set(k,[]);groups.get(k).push(it);});
+  groups.forEach(items=>{let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9,z0=1e9,z1=-1e9;items.forEach(([m])=>{const e=m.elements;x0=Math.min(x0,e[12]);x1=Math.max(x1,e[12]);y0=Math.min(y0,e[13]);y1=Math.max(y1,e[13]);z0=Math.min(z0,e[14]);z1=Math.max(z1,e[14]);});
+    const g=geo.clone(),c=V((x0+x1)/2,(y0+y1)/2,(z0+z1)/2);g.boundingSphere=new THREE.Sphere(c,Math.hypot(x1-x0,y1-y0,z1-z0)/2+1);
+    const im=new THREE.InstancedMesh(g,mat,items.length);const col=new THREE.Color();items.forEach(([m,cc],i)=>{im.setMatrixAt(i,m);col.set(cc);im.setColorAt(i,col);});if(im.instanceColor)im.instanceColor.needsUpdate=true;
+    im.frustumCulled=true;im.castShadow=false;im.receiveShadow=true;im.userData.layer='int';im.userData.c=c;im.userData.r=g.boundingSphere.radius;scene.add(im);CHUNKS.push(im);});});}
 // textured walls are merged per material into one mesh, with world-scaled UVs so bricks line up
 const WALLS={};
 function wallBox(kind,w,h,d,x,y,z,tint,uoff){
@@ -460,30 +475,32 @@ function makeWalls(w,d){return{
   right:{ry:Math.PI/2,n:V(1,0,0),t:V(0,0,-1),half:w/2},left:{ry:-Math.PI/2,n:V(-1,0,0),t:V(0,0,1),half:w/2}};}
 const _v=new THREE.Vector3();
 function wpos(wl,u,v,w){return _v.set(0,v,0).addScaledVector(wl.t,u).addScaledVector(wl.n,wl.half+w);}
-function wbox(wl,mat,u,v,w,bw,bh,bd,rz,rx){const p=wpos(wl,u,v,w);place(UB,mat,p.x,p.y,p.z,bw,bh,bd,rx||0,wl.ry,rz||0);}
-function wcyl(wl,mat,u,v,w,r,h){const p=wpos(wl,u,v,w);place(UC,mat,p.x,p.y,p.z,r,h,r,0,wl.ry,0);}
-function wball(wl,mat,u,v,w,r){const p=wpos(wl,u,v,w);place(US,mat,p.x,p.y,p.z,r,r,r,0,0,0);}
+let NOBOX=false;   // low mode: skip small decorative pieces (random choices are still made, so the city layout stays identical)
+function wbox(wl,mat,u,v,w,bw,bh,bd,rz,rx){if(NOBOX)return;const p=wpos(wl,u,v,w);place(UB,mat,p.x,p.y,p.z,bw,bh,bd,rx||0,wl.ry,rz||0);}
+function wcyl(wl,mat,u,v,w,r,h){if(NOBOX)return;const p=wpos(wl,u,v,w);place(UC,mat,p.x,p.y,p.z,r,h,r,0,wl.ry,0);}
+function wball(wl,mat,u,v,w,r){if(NOBOX)return;const p=wpos(wl,u,v,w);place(US,mat,p.x,p.y,p.z,r,r,r,0,0,0);}
 
 /* ================= building parts ================= */
 let S={trim:M.trimCream,frame:M.frameDark},LITE=false;
 function windowUnit(wl,u,yb,o){
   o=o||{};
   const ww=o.w||1.2,wh=o.h||1.7,sill=o.sill!=null?o.sill:0.9,y0=yb+sill,yc=y0+wh/2,ft=0.07,fd=0.1,fw=0.05;
-  wbox(wl,M.tileDark,u,yc,0.004,ww+0.04,wh+0.04,0.01);
+  if(LOWEND){wbox(wl,S.frame,u,yc,0.012,ww,wh,0.024);wbox(wl,R()<0.38?M.glassLit:M.glass,u,yc,0.03,ww-0.14,wh-0.14,0.012);}   // low mode: frame + glass, 2 pieces instead of 8
+  else{wbox(wl,M.tileDark,u,yc,0.004,ww+0.04,wh+0.04,0.01);
   wbox(wl,R()<0.38?M.glassLit:M.glass,u,yc,0.015,ww-0.08,wh-0.08,0.02);
   wbox(wl,S.frame,u-ww/2+ft/2,yc,fw,ft,wh,fd);wbox(wl,S.frame,u+ww/2-ft/2,yc,fw,ft,wh,fd);
   wbox(wl,S.frame,u,y0+wh-ft/2,fw,ww,ft,fd);wbox(wl,S.frame,u,y0+ft/2,fw,ww,ft,fd);
   wbox(wl,S.frame,u,y0+wh*0.55,fw+0.01,ww,0.05,fd*0.9);
-  if(!o.door)wbox(wl,S.frame,u,y0+wh*0.775,0.04,0.03,wh*0.45,0.05);
+  if(!o.door)wbox(wl,S.frame,u,y0+wh*0.775,0.04,0.03,wh*0.45,0.05);}
   if(!o.door)wbox(wl,S.trim,u,y0-0.06,0.1,ww+0.24,0.1,0.2);
   wbox(wl,S.trim,u,y0+wh+0.11,0.03,ww+0.34,0.22,0.06);
   if(o.key)wbox(wl,S.trim,u,y0+wh+0.13,0.07,0.22,0.3,0.08);
-  const L0=LAYER;LAYER='det';
+  const L0=LAYER;LAYER='det';NOBOX=LOWEND;
   if(!LITE&&R()<0.3){const cw=ww*rr(0.18,0.3);wbox(wl,M.curtain,u-ww/2+ft+cw/2,yc,0.03,cw,wh-0.16,0.01);if(R()<0.6)wbox(wl,M.curtain,u+ww/2-ft-cw/2,yc,0.03,cw,wh-0.16,0.01);}
-  if(o.door||o.plain||LITE){LAYER=L0;return;}
+  if(o.door||o.plain||LITE){LAYER=L0;NOBOX=false;return;}
   if(o.ac!==false&&R()<0.15){const au=u+rr(-0.12,0.12);wbox(wl,M.ac,au,y0+0.25,0.28,0.66,0.42,0.5);wbox(wl,M.acDark,au,y0+0.25,0.535,0.6,0.34,0.02);for(let i=0;i<5;i++)wbox(wl,M.ac,au,y0+0.11+i*0.07,0.545,0.6,0.012,0.012);}
   else if(R()<0.13){wbox(wl,M.pot,u,y0+0.06,0.24,ww*0.9,0.2,0.22);for(let i=0;i<6;i++)wball(wl,pick([M.leaf,M.leaf2,M.flower]),u-ww*0.38+i*ww*0.152,y0+0.22,0.24,rr(0.09,0.13));}
-  LAYER=L0;
+  LAYER=L0;NOBOX=false;
 }
 function balconyDoor(wl,u,yb){
   const dw=1.3,dh=2.35,y0=yb+0.14,bw=2.3,bd=1.05,rh=1.0,ry0=yb+0.14;
@@ -496,8 +513,8 @@ function balconyDoor(wl,u,yb){
   const L0=LAYER;LAYER='det';
   wbox(wl,M.railing,u,ry0+rh,bd-0.025,bw,0.05,0.05);wbox(wl,M.railing,u,ry0+0.1,bd-0.025,bw,0.03,0.03);
   [-1,1].forEach(s=>{wbox(wl,M.railing,u+s*(bw/2-0.025),ry0+rh,bd/2,0.05,0.05,bd);wbox(wl,M.railing,u+s*(bw/2-0.025),ry0+0.1,bd/2,0.03,0.03,bd);
-    for(let z=0.14;z<bd-0.05;z+=0.13)wbox(wl,M.railing,u+s*(bw/2-0.025),ry0+rh/2,z,0.018,rh,0.018);});
-  for(let x=-bw/2+0.03;x<=bw/2-0.02;x+=0.125)wbox(wl,M.railing,u+x,ry0+rh/2,bd-0.025,0.018,rh,0.018);
+    let q=0;for(let z=0.14;z<bd-0.05;z+=0.13){NOBOX=LOWEND&&(q++%3!==0);wbox(wl,M.railing,u+s*(bw/2-0.025),ry0+rh/2,z,0.018,rh,0.018);}NOBOX=false;});
+  {let q=0;for(let x=-bw/2+0.03;x<=bw/2-0.02;x+=0.125){NOBOX=LOWEND&&(q++%3!==0);wbox(wl,M.railing,u+x,ry0+rh/2,bd-0.025,0.018,rh,0.018);}NOBOX=false;}
   if(R()<0.65){const pu=u+pick([-0.78,0.78]);wcyl(wl,M.pot,pu,ry0+0.17,0.72,0.15,0.34);wball(wl,pick([M.leaf,M.leaf2]),pu,ry0+0.56,0.72,0.27);wball(wl,pick([M.leaf,M.leaf2]),pu+0.12,ry0+0.72,0.68,0.18);}
   if(R()<0.45){const cu=u+pick([-0.35,0.35]);wbox(wl,M.metal,cu,ry0+0.45,0.55,0.4,0.03,0.38);wbox(wl,M.metal,cu,ry0+0.7,0.36,0.4,0.42,0.03);
     [-0.18,0.18].forEach(o=>{wbox(wl,M.metal,cu+o,ry0+0.22,0.42,0.025,0.45,0.025);wbox(wl,M.metal,cu+o,ry0+0.22,0.7,0.025,0.45,0.025);});}
@@ -1439,9 +1456,10 @@ const sky=new THREE.Mesh(new THREE.SphereGeometry(600,32,16),skyMat);sky.renderO
 const starGeo=new THREE.BufferGeometry();
 (function(){const n=900,a=new Float32Array(n*3);for(let i=0;i<n;i++){const t=R()*Math.PI*2,y=rr(0.08,1),r=Math.sqrt(1-y*y);a[i*3]=Math.cos(t)*r*580;a[i*3+1]=y*580;a[i*3+2]=Math.sin(t)*r*580;}starGeo.setAttribute('position',new THREE.BufferAttribute(a,3));})();
 const stars=new THREE.Points(starGeo,new THREE.PointsMaterial({color:0xffffff,size:1.6,sizeAttenuation:false,transparent:true,opacity:0,fog:false,depthWrite:false}));scene.add(stars);
-scene.fog=new THREE.Fog(0xdbe5ea,90,380);
+const FOGN=LOWEND?60:90,FOGF=LOWEND?240:380;scene.fog=new THREE.Fog(0xdbe5ea,FOGN,FOGF);
 const DAY={top:new THREE.Color(0x5f93cf),bot:new THREE.Color(0xdbe5ea),sun:new THREE.Color(0xfff0d8),sunI:1.9,hs:new THREE.Color(0xd6e6ff),hg:new THREE.Color(0x7a6a58),hi:0.7,exp:1.0,dir:V(32,46,38).normalize()};
 const NIGHT={top:new THREE.Color(0x03050d),bot:new THREE.Color(0x172033),sun:new THREE.Color(0x8ea6ff),sunI:0.3,hs:new THREE.Color(0x30406a),hg:new THREE.Color(0x15120f),hi:0.25,exp:1.2,dir:V(-30,50,24).normalize()};
+if(LOWEND){DAY.exp*=0.82;NIGHT.exp*=0.85;DAY.hi*=0.85;}   // the cheaper low-mode lighting reads brighter, so pull it back a little
 const sunDir=DAY.dir.clone();
 let tod=0,todTarget=0;
 function applyTime(k){
@@ -1453,8 +1471,9 @@ function applyTime(k){
 }
 applyTime(0);
 // small pools of point lights that follow you: nearest shops and streetlights
-const shopPool=[0,1,2,3].map(()=>{const l=new THREE.PointLight(0xffe0b0,0,10,2);scene.add(l);return l;});
-const lampPool=[0,1,2,3].map(()=>{const l=new THREE.PointLight(0xffd6a0,0,26,2);scene.add(l);return l;});
+// every extra light is paid for on every pixel, so low mode skips these (lit windows and lamps still glow)
+const shopPool=[0,1,2,3].map(()=>{const l=new THREE.PointLight(0xffe0b0,0,10,2);l.visible=!LOWEND;scene.add(l);return l;});
+const lampPool=[0,1,2,3].map(()=>{const l=new THREE.PointLight(0xffd6a0,0,26,2);l.visible=!LOWEND;scene.add(l);return l;});
 function updatePools(f){
   SHOPL.slice().sort((a,b)=>a.p.distanceToSquared(f)-b.p.distanceToSquared(f)).slice(0,4).forEach((s,i)=>{shopPool[i].position.copy(s.p);shopPool[i].color.setHex(s.c);});
   LAMPS.slice().sort((a,b)=>a.distanceToSquared(f)-b.distanceToSquared(f)).slice(0,4).forEach((p,i)=>lampPool[i].position.copy(p));
@@ -1538,7 +1557,7 @@ LANES.forEach(L=>{const dx=L.b[0]-L.a[0],dz=L.b[1]-L.a[1];L.len=Math.hypot(dx,dz
 STAFF.forEach(s=>{const n=addNPC('staff',s.x,s.z,s.yaw,{shop:s.shop});const U={police:['#1d2c4a','#1b1f2a','#111111'],medic:['#5fae9c','#5fae9c','#f2f2f2'],suit:['#2a2d33','#2a2d33','#1a1a1a']}[s.uniform];if(U){n.col.shirt=U[0];n.col.pants=U[1];n.col.shoes=U[2];}});
 MANNEQ.forEach(s=>addNPC('mannequin',s.x,s.z,s.yaw,{y:s.y}));
 const boxIM=new THREE.InstancedMesh(UB,std({roughness:0.75}),npcs.length*BOXP.length);
-const sphIM=new THREE.InstancedMesh(US,std({roughness:0.6}),npcs.length*SPHP.length);
+const sphIM=new THREE.InstancedMesh(new THREE.SphereGeometry(1,8,6),std({roughness:0.6}),npcs.length*SPHP.length);
 [boxIM,sphIM].forEach(im=>{im.frustumCulled=false;im.castShadow=true;im.receiveShadow=true;im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);scene.add(im);});
 {const c=new THREE.Color();npcs.forEach((n,i)=>{BOXP.forEach((P,j)=>{c.set(n.col[P.c]);boxIM.setColorAt(i*BOXP.length+j,c);});SPHP.forEach((P,j)=>{c.set(n.col[P.c]);sphIM.setColorAt(i*SPHP.length+j,c);});});
   if(boxIM.instanceColor)boxIM.instanceColor.needsUpdate=true;if(sphIM.instanceColor)sphIM.instanceColor.needsUpdate=true;}
@@ -1595,7 +1614,10 @@ function updateNPCs(dt){
   const removeWalker=n=>{const bins=getWalkerBins(n.lane)[n.dir>0?1:0],k=walkerBin(n),a=bins.get(k);if(!a)return;const i=a.indexOf(n);if(i>=0)a.splice(i,1);if(!a.length)bins.delete(k);};
   for(const a of WALKER_ACTIVE_BUCKETS)a.length=0;WALKER_ACTIVE_BUCKETS.length=0;
   for(const n of npcs)if(n.state==='lane')addWalker(n);
+  const tick=(updateNPCs.f=(updateNPCs.f||0)+1),farD=(LDIST.det+30)**2,dt0=dt;
   npcs.forEach((n,i)=>{
+    // people far from you still walk, but only get updated every 4th frame (with the time they missed)
+    n._acc=(n._acc||0)+dt0;const dx0=n.x-PLAYER.x,dz0=n.z-PLAYER.z;if(dx0*dx0+dz0*dz0>farD&&n.state!=='down'&&(tick+i)%4!==0)return;dt=n._acc;n._acc=0;
     if(n.state==='down'){
       const b=n.body;
       if(b){const P=b.position,Q=b.quaternion,sp=Math.hypot(b.velocity.x,b.velocity.y,b.velocity.z);
@@ -1768,9 +1790,10 @@ const canTex=canvasTex(512,512,(g,w,h)=>{
   g.font='600 20px Archivo,Arial';g.fillText('CITRUS • 355 ML',w/2,300);
   g.fillStyle='#d2d5d1';g.fillRect(0,0,w,24);g.fillRect(0,h-24,w,24);
 });
+// shop items are tiny, so they use low-detail shapes (the old 252-triangle spheres cost 1.5 million triangles a frame)
 const PIM={box:new THREE.InstancedMesh(UB,std({map:packageTex,roughness:0.58}),PCAP.box),
-  sph:new THREE.InstancedMesh(US,std({roughness:0.5}),PCAP.sph),
-  cyl:new THREE.InstancedMesh(UC,std({map:canTex,roughness:0.32,metalness:0.12}),PCAP.cyl)};
+  sph:new THREE.InstancedMesh(new THREE.SphereGeometry(1,8,6),std({roughness:0.5}),PCAP.sph),
+  cyl:new THREE.InstancedMesh(new THREE.CylinderGeometry(1,1,1,10),std({map:canTex,roughness:0.32,metalness:0.12}),PCAP.cyl)};
 const PDIRTY={box:false,sph:false,cyl:false};
 const _pq=new THREE.Quaternion(),_pp=new THREE.Vector3(),_ps=new THREE.Vector3(),_pm=new THREE.Matrix4();
 function writeProp(p){
@@ -1778,17 +1801,22 @@ function writeProp(p){
   if(b){const P=b.position,Q=b.quaternion;_pp.set(P.x,P.y,P.z);_pq.set(Q.x,Q.y,Q.z,Q.w);}
   else{_pp.set(p.pos[0],p.pos[1],p.pos[2]);_pq.set(p.q[0],p.q[1],p.q[2],p.q[3]);}
   const z=p.size;if(p.type==='box')_ps.set(z[0],z[1],z[2]);else if(p.type==='sph')_ps.set(z[0],z[0],z[0]);else _ps.set(z[0],z[1],z[0]);
-  _pm.compose(_pp,_pq,_ps);PIM[p.type].setMatrixAt(p.idx,_pm);PDIRTY[p.type]=true;
+  if(p.slot==null||p.slot<0)return;_pm.compose(_pp,_pq,_ps);PIM[p.type].setMatrixAt(p.slot,_pm);PDIRTY[p.type]=true;
 }
+// pack only the items you can see (shops near you, plus anything picked up or moving) into the front of each list, and draw just those
+const _pcol=new THREE.Color();let propKey='';
+function repackProps(near){const n={box:0,sph:0,cyl:0};
+  PROPS.forEach(p=>{const show=p.shop<0||p.body||p.taken||p.heldBy||near[p.shop];if(!show){p.slot=-1;return;}p.slot=n[p.type]++;_pcol.set(p.c);PIM[p.type].setColorAt(p.slot,_pcol);writeProp(p);});
+  for(const t in PIM){const im=PIM[t];im.count=n[t];if(im.instanceColor)im.instanceColor.needsUpdate=true;im.instanceMatrix.needsUpdate=true;PDIRTY[t]=false;}}
 {const col=new THREE.Color(1,1,1);
-  for(const t in PIM){const im=PIM[t];im.frustumCulled=false;im.castShadow=im.receiveShadow=true;im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);im.setColorAt(PCAP[t]-1,col);im.count=PCOUNT[t];scene.add(im);}
-  PROPS.forEach((p,i)=>{col.set(p.c);PIM[p.type].setColorAt(p.idx,col);writeProp(p);gridAdd(i);});
-  for(const t in PIM){if(PIM[t].instanceColor)PIM[t].instanceColor.needsUpdate=true;PIM[t].instanceMatrix.needsUpdate=true;}}
+  for(const t in PIM){const im=PIM[t];im.frustumCulled=false;im.castShadow=false;im.receiveShadow=true;im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);im.setColorAt(PCAP[t]-1,col);im.count=0;scene.add(im);}
+  PROPS.forEach((p,i)=>{p.slot=-1;gridAdd(i);});}
 // products in shops you're far from are hidden along with their shelves (interiors only draw up close)
 const _zm=new THREE.Matrix4().makeScale(0,0,0);
-function updatePropLOD(px,pz){const near=SHOPS.map(sh=>Math.hypot(sh.inside.x-px,sh.inside.z-pz)<LDIST.int+28);
-  PROPS.forEach(p=>{if(p.shop<0||p.body||p.taken||p.heldBy)return;const v=near[p.shop];if(v===p.vis)return;p.vis=v;if(v)writeProp(p);else{PIM[p.type].setMatrixAt(p.idx,_zm);PDIRTY[p.type]=true;}});
-  for(const t in PIM)if(PDIRTY[t]){PIM[t].instanceMatrix.needsUpdate=true;PDIRTY[t]=false;}}
+function updatePropLOD(px,pz){const near=SHOPS.map(sh=>Math.hypot(sh.inside.x-px,sh.inside.z-pz)<LDIST.int+20);
+  let k='';near.forEach((v,i)=>{if(v)k+=i+',';});k+='|'+activeProps.size+'|'+PROPS.reduce((a,p)=>a+(p.taken?1:0),0);   // repack only when what's visible changes
+  if(k!==propKey){propKey=k;repackProps(near);}
+  else{for(const t in PIM)if(PDIRTY[t]){PIM[t].instanceMatrix.needsUpdate=true;PDIRTY[t]=false;}}}
 function propR(p){const z=p.size;return p.type==='sph'?z[0]:p.type==='cyl'?Math.max(z[0],z[1]/2):0.5*Math.max(z[0],z[1],z[2]);}
 function activateProp(i,wake){
   const p=PROPS[i];if(p.body||!PH)return p.body;
@@ -1813,8 +1841,7 @@ function activateNear(x,y,z,r,wake){
 function spawnProp(type,size,color,x,y,z,price,si){
   if(PCOUNT[type]>=PCAP[type])return -1;
   const p={type,pos:[x,y,z],q:[0,0,0,1],home:[x,y,z],size,c:color,price,shop:si,paid:true,taken:true,heldBy:null,body:null,idx:PCOUNT[type]++,key:null};
-  const i=PROPS.push(p)-1;PIM[type].count=PCOUNT[type];PIM[type].setColorAt(p.idx,new THREE.Color(color));if(PIM[type].instanceColor)PIM[type].instanceColor.needsUpdate=true;
-  writeProp(p);gridAdd(i);activateProp(i,true);return i;
+  const i=PROPS.push(p)-1;p.slot=-1;gridAdd(i);activateProp(i,true);propKey='';updatePropLOD(PLAYER.x,PLAYER.z);return i;   // repack so the new item gets a draw slot
 }
 
 /* ---- people get solid bodies near you so hands and thrown things hit them ---- */
@@ -2479,7 +2506,7 @@ const sparkMat=std({color:0xffd27a,emissive:0xffb040,emissiveIntensity:2});spark
 const sparkIM=new THREE.InstancedMesh(US,sparkMat,SPARK_MAX);sparkIM.frustumCulled=false;sparkIM.count=0;scene.add(sparkIM);
 const flashMat=new THREE.MeshBasicMaterial({color:0xffc060,transparent:true,opacity:0.9,fog:false});
 const flashMesh=new THREE.Mesh(new THREE.SphereGeometry(1,10,8),flashMat);flashMesh.visible=false;scene.add(flashMesh);
-const flashLight=new THREE.PointLight(0xffb060,0,9,2);scene.add(flashLight);
+const flashLight=new THREE.PointLight(0xffb060,0,9,2);flashLight.visible=!LOWEND;scene.add(flashLight);
 const tracers=[0,1,2,3,4,5].map(()=>{const m=new THREE.Mesh(new THREE.BoxGeometry(0.008,0.008,1).translate(0,0,0.5),new THREE.MeshBasicMaterial({color:0xffe6a0,transparent:true,opacity:0.7,fog:false}));m.visible=false;m.t=0;scene.add(m);return m;});
 let flashT=0,tracerI=0;const _Y=V(0,1,0);
 function bulletHole(p,n){const i=holeN%HOLES_MAX;_q.setFromUnitVectors(_Y,n);_m.compose(_p.set(p.x+n.x*0.003,p.y+n.y*0.003,p.z+n.z*0.003),_q,_s.set(0.018,0.002,0.018));holeIM.setMatrixAt(i,_m);holeN++;holeIM.count=Math.min(holeN,HOLES_MAX);holeIM.instanceMatrix.needsUpdate=true;}
@@ -3089,7 +3116,7 @@ function updateWorld(dt){
   skyMat.uniforms.bot.value.lerp(DUSK,dusk*0.55);sun.color.lerp(SUNSET,dusk*0.7);
   const cl=WORLD.cloudK;skyMat.uniforms.top.value.lerp(_c1.copy(GREYSKY).multiplyScalar(1-tod*0.85),cl*0.8);skyMat.uniforms.bot.value.lerp(_c1.copy(GREYLOW).multiplyScalar(1-tod*0.85),cl*0.6);
   sun.intensity*=(1-0.7*cl);hemi.intensity*=(1-0.2*cl);scene.fog.color.copy(skyMat.uniforms.bot.value);
-  scene.fog.near=90-65*WORLD.fogK-35*WORLD.rainK;scene.fog.far=380-270*WORLD.fogK-170*WORLD.rainK;
+  scene.fog.near=FOGN-(FOGN-25)*WORLD.fogK-35*WORLD.rainK;scene.fog.far=FOGF-(FOGF-110)*WORLD.fogK-(FOGF-210)*WORLD.rainK;
   stars.material.opacity*=(1-cl);
   rainLines.material.opacity=WORLD.rainK*0.45;rainLines.visible=WORLD.rainK>0.02;
   if(AC&&NOISE){if(!rainSnd&&WORLD.rainK>0.05){const s2=AC.createBufferSource(),f=AC.createBiquadFilter(),g=AC.createGain();s2.buffer=NOISE;s2.loop=true;f.type='bandpass';f.frequency.value=1600;f.Q.value=0.6;g.gain.value=0;s2.connect(f);f.connect(g);g.connect(AC.destination);s2.start();rainSnd={s2,g};}
@@ -3309,7 +3336,7 @@ function onXREnd(){
   ctrls.forEach(c=>{dropHeld(c);if(c.body&&c.inWorld){world.remove(c.body);c.inWorld=false;}});
   closeMenu();closeDialogue();
   rig.position.set(0,0,0);rig.rotation.set(0,0,0);walk.pos.set(h.x,1.85,h.z);walk.yaw=yw;walk.pitch=0;
-  bVR.textContent='Enter VR';renderer.shadowMap.enabled=true;renderer.shadowMap.autoUpdate=true;setMode('walk',false);
+  bVR.textContent='Enter VR';renderer.shadowMap.enabled=!LOWEND;renderer.shadowMap.autoUpdate=true;setMode('walk',false);
 }
 bVR.addEventListener('click',async()=>{
   audio();
@@ -3346,7 +3373,7 @@ function makeAirliner(livery){const g=new THREE.Group(),B=(w,h,d)=>new THREE.Box
   avPart(g,B(2.6,0.6,0.05),avMat.win,0,0.95,17.6,-0.6,0,0);
   const gear=new THREE.Group();g.add(gear);[[0,-2.2,12],[-2.4,-2.2,-0.5],[2.4,-2.2,-0.5]].forEach(([x,y,z])=>{avPart(gear,B(0.18,1.6,0.18),avMat.dark,x,y+0.6,z);avPart(gear,C(0.5,0.5,0.4,10).rotateY(Math.PI/2),avMat.dark,x,y-0.3,z);});
   const st=avPart(g,new THREE.SphereGeometry(0.28,8,6),avMat.strobe,0,7.3,-19.2);st.castShadow=false;
-  g.userData={gear,strobe:st};g.traverse(o=>{o.matrixAutoUpdate=true;});return g;}
+  g.userData={gear,strobe:st};return mergeParts(g,[st]);}
 // an original light helicopter, about 10 m long, nose toward +Z
 function makeHeli(body,trim){const g=new THREE.Group(),B=(w,h,d)=>new THREE.BoxGeometry(w,h,d);
   const cab=avPart(g,new THREE.SphereGeometry(1,16,12),body,0,1.55,0.3);cab.scale.set(1.15,1.05,2.0);
@@ -3363,7 +3390,14 @@ function makeHeli(body,trim){const g=new THREE.Group(),B=(w,h,d)=>new THREE.BoxG
   const disc=new THREE.Mesh(new THREE.CircleGeometry(5.2,28).rotateX(-Math.PI/2),new THREE.MeshBasicMaterial({color:0x111111,transparent:true,opacity:0,depthWrite:false}));rotor.add(disc);
   const tail=new THREE.Group();tail.position.set(0.18,2.3,-6.45);g.add(tail);avPart(tail,B(0.04,1.5,0.14),avMat.dark,0,0,0);
   const st=avPart(g,new THREE.SphereGeometry(0.12,6,5),avMat.strobe,0,2.95,-6.75);st.castShadow=false;
-  g.userData={rotor,tail,disc,strobe:st,spin:0};return g;}
+  g.userData={rotor,tail,disc,strobe:st,spin:0};return mergeParts(g,[st]);}
+function mergeParts(group,keep){const byMat=new Map();
+  group.children.slice().forEach(m=>{if(!m.isMesh||keep.includes(m))return;m.updateMatrix();const g=m.geometry.index?m.geometry.toNonIndexed():m.geometry.clone();g.applyMatrix4(m.matrix);
+    if(!byMat.has(m.material))byMat.set(m.material,[]);byMat.get(m.material).push(g);group.remove(m);});
+  byMat.forEach((list,mat)=>{let n=0;list.forEach(g=>n+=g.attributes.position.count);const pos=new Float32Array(n*3),nor=new Float32Array(n*3);let o=0;
+    list.forEach(g=>{pos.set(g.attributes.position.array,o*3);nor.set(g.attributes.normal.array,o*3);o+=g.attributes.position.count;g.dispose();});
+    const bg=new THREE.BufferGeometry();bg.setAttribute('position',new THREE.BufferAttribute(pos,3));bg.setAttribute('normal',new THREE.BufferAttribute(nor,3));bg.computeBoundingSphere();
+    const mm=new THREE.Mesh(bg,mat);mm.castShadow=true;group.add(mm);});return group;}
 function spinHeli(g,k,dt){const u=g.userData;u.spin=k;u.rotor.rotation.y+=dt*k*32;u.tail.rotation.x+=dt*k*60;u.disc.material.opacity=Math.max(0,k-0.6)*0.35;u.strobe.visible=(performance.now()%1300)<90;}
 
 // ---- airliners ----
@@ -3609,7 +3643,7 @@ function frame(now){
 document.getElementById('load').hidden=true;
 try{if(localStorage.getItem(SAVEKEY))setTimeout(()=>loadGame(true),300);else toast('Welcome to Cheet City. Press P for your phone.');}catch(e){}
 try{if(SETTINGS.intro||!localStorage.getItem('cheetcity_intro_seen'))setTimeout(playIntro,500);}catch(e){}
-window.__city={SOLIDS,FLOORS,SHOPS,npcs,LANES,heightAt,collide,START,frame,PROPS,STATICS,PLAYER,walk,world,camera,xr:{xrState,xrUpdate,ctrls,XRHEAD,onXRStart,onXREnd,poseHand,makeHand,buildHand,tryGrab,dropHeld,updateHandVisuals},
+window.__city={renderer,scene,SOLIDS,FLOORS,SHOPS,npcs,LANES,heightAt,collide,START,frame,PROPS,STATICS,PLAYER,walk,world,camera,xr:{xrState,xrUpdate,ctrls,XRHEAD,onXRStart,onXREnd,poseHand,makeHand,buildHand,tryGrab,dropHeld,updateHandVisuals},
   game:{getTod:()=>tod,WORLD,JOBS,PHONE,togglePhone,drawPhone,startTaxi,startDelivery,quitJob,saveGame,loadGame,talkTo,nearPerson,skipTime,ANCHORS,BENCHES,CHUNKS,updateChunks,floorBelow,climbPick,CLIMBS,HFLOORS,POIS,BLDGS,intKids:()=>INTKIDS,holsterGripPoint,KIT,HOLSTER,holsterPose,holsterGun,drawGun,MAGS,AMMO,MDEF,spawnMag,ejectMag,insertMag,tryGrab,dropHeld,updateHolds,DRIVE,enterCar,exitCar,nearCar,driveUpdate,xrDrive,seatInfo,CARS,GUNS,shoot,spawnGun,raycast,LB,torso,BODY,bodyRoot,REF,DESK,lightState,hitNPC,openDialogue,closeDialogue,nearStaff,unpaidFor,getDLG:()=>DLG,getWallet:()=>WALLET,deskGrab,deskPunch,openMenu,drawMenu,menuPanel,dlgPanel,activateNear,activeProps,refreshStatics,activeS,bleed,drops,
   // aviation, cutscenes, guns and settings (for testing from the console)
   HELI,heliUpdate,nearHeli,enterHeli,exitHeli,JETS,updateJet,AIHELI,CUT,playIntro,playCutscene,endCutscene,updateCutscene,deskReload,renderGuns,deskGunUpdate,SETTINGS,applyFov,GDEF,BLDGS_:BLDGS}};
