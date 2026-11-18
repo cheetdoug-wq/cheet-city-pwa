@@ -923,9 +923,9 @@ building(78,34,2,{w:16,floors:5,wall:'stucco',tint:[0.92,0.9,0.82],trim:M.trimWh
 /* =====================================================================
    CHEET CITY: street grid
    ===================================================================== */
-const XST=[{n:'Second St',c:-40,h:6.8},{n:'Main St',c:17,h:6.8},{n:'Park Ave',c:66,h:6.8}];
+const XST=[{n:'North St',c:-150,h:6.8},{n:'Second St',c:-40,h:6.8},{n:'Main St',c:17,h:6.8},{n:'Park Ave',c:66,h:6.8}];
 const ZST=[{n:'West Ave',c:-190,h:5.8},{n:'Oak Ave',c:-74,h:5.8},{n:'Elm Ave',c:37,h:5.8},{n:'Tower Ave',c:160,h:5.8,z1:134}];   // z1: Tower Ave now ends at the airport fence instead of running across the runway
-const XMIN=-300,XMAX=300,ZMIN=-140,ZMAX=220,SWW=4.2;
+const XMIN=-300,XMAX=300,ZMIN=-206,ZMAX=220,SWW=4.2;   // ZMIN was -140: the city now runs north to the harbour
 const ground=new THREE.Mesh(new THREE.PlaneGeometry(XMAX-XMIN+40,ZMAX-ZMIN+40),std({color:0x55534f,roughness:0.95}));ground.rotation.x=-Math.PI/2;ground.position.set(0,-0.01,(ZMIN+ZMAX)/2);ground.receiveShadow=true;scene.add(ground);
 const farGround=new THREE.Mesh(new THREE.PlaneGeometry(3000,3000),std({color:0x5a5950,roughness:1}));farGround.rotation.x=-Math.PI/2;farGround.position.y=-0.04;scene.add(farGround);
 function asphalt(x0,x1,z0,z1,y,tint){const t=asphaltTex.clone();t.needsUpdate=true;t.repeat.set((x1-x0)/8,(z1-z0)/8);const m=new THREE.Mesh(new THREE.PlaneGeometry(x1-x0,z1-z0),std({map:t,roughness:0.92,color:tint||0xffffff}));m.rotation.x=-Math.PI/2;m.position.set((x0+x1)/2,y,(z0+z1)/2);m.receiveShadow=true;scene.add(m);}
@@ -997,7 +997,7 @@ XST.forEach(st=>XSEG.forEach(([x0,x1])=>[-1,1].forEach(side=>{
   const curb=st.c+side*st.h,rot=side<0?0:2;let n=0;
   for(let x=x0+8;x<x1-6;x+=22){if(st.n==='Main St'&&x>-132&&x<94)continue;streetlight(x,curb+side*0.65,rot);
     if(x+11<x1-6)tree(x+11,curb+side*1.0);if(++n%3===0)bench(x+5,curb+side*0.85,rot);if(n%4===1)hydrant(x-3,curb+side*0.55);}})));
-ZST.forEach(st=>ZSEGS.forEach(([z0,z1])=>[-1,1].forEach(side=>{
+ZST.forEach(st=>clipSegs(ZSEGS,st.z1||ZMAX).forEach(([z0,z1])=>[-1,1].forEach(side=>{
   const curb=st.c+side*st.h,rot=side<0?1:3;let n=0;
   for(let z=z0+8;z<z1-6;z+=22){streetlight(curb+side*0.65,z,rot);if(z+11<z1-6)tree(curb+side*1.0,z+11);if(++n%4===2)hydrant(curb+side*0.55,z-3);}})));
 // traffic signals where Main/Second/Park cross Elm and Tower (Main & Elm already has them)
@@ -1276,6 +1276,22 @@ cityHall(-4,-76.8);
 fillRow(47,150,-50.8,1);
 // --- fronts on Second St, backing onto the Main St row ---
 fillRow(-180,-84,-29.2,-1);fillRow(-64,27,-29.2,-1);fillRow(47,150,-29.2,-1);
+// --- NORTH END: North St, a new row of blocks on both sides, and the harbour promenade beyond ---
+[[-298,-201],[-179,-85],[-63,26],[48,149],[171,298]].forEach(([a,b])=>{fillRow(a,b,-161,1);fillRow(a,b,-139,-1);});
+// harbour: water to the horizon, a railing you can lean on, a lawn strip, a pier and a lighthouse
+{const wm=new THREE.Mesh(new THREE.PlaneGeometry(3000,1300),std({color:0x2d5568,roughness:0.12,metalness:0.35}));wm.rotation.x=-Math.PI/2;wm.position.set(0,0.02,ZMIN-1-650);wm.receiveShadow=true;scene.add(wm);
+  XSEG.forEach(([a,b])=>lawn(a+SWW,b-SWW,ZMIN+4,-174,grassTex,0.02));   // split so the avenues and their sidewalks stay visiblesidewalk(XMIN,XMAX,ZMIN,ZMIN+4);
+  for(let x=XMIN+2;x<XMAX;x+=2.5){if(x>-34.5&&x<-25.5)continue;cyl(M.railing,x,0.6,ZMIN+0.25,0.03,1.0);}
+  [[XMIN,-34],[-26,XMAX]].forEach(([a,b])=>{box(M.railing,(a+b)/2,1.1,ZMIN+0.25,b-a,0.06,0.06);box(M.railing,(a+b)/2,0.62,ZMIN+0.25,b-a,0.04,0.04);solid(a,b,ZMIN,ZMIN+0.5,1.15);});   // gap for the pier
+  for(let x=XMIN+14;x<XMAX-10;x+=26){if(ZST.some(st=>Math.abs(x-st.c)<14))continue;tree(x,ZMIN+14);if(Math.abs(x)%52<26)bench(x+8,ZMIN+4.6,2);streetlight(x+13,ZMIN+4.4,2);}
+  // pier out over the water (the railing opens here)
+  setCtx(-30,ZMIN,0);box(M.woodLight,0,0.35,-30,8,0.25,60);for(let z=-58;z<0;z+=6){cyl(M.trunk,-3.8,-0.2,z,0.18,1.4);cyl(M.trunk,3.8,-0.2,z,0.18,1.4);}
+  for(let z=-59;z<-0.5;z+=2){cyl(M.railing,-3.9,0.95,z,0.025,0.95);cyl(M.railing,3.9,0.95,z,0.025,0.95);}box(M.railing,-3.9,1.42,-30,0.05,0.05,60);box(M.railing,3.9,1.42,-30,0.05,0.05,60);
+  floorZone(-4,4,-60,0.6,0.48);solid(-4.2,-3.9,-60,0,1.45);solid(3.9,4.2,-60,0,1.45);solid(-4,4,-60.3,-60,1.45);setCtx(0,0,0);
+  // lighthouse on a breakwater to the east
+  setCtx(150,ZMIN-70,0);cyl(M.concrete,0,0.6,0,7,1.2);for(let i=0;i<5;i++)cyl(i%2?M.red:M.trimWhite,0,1.2+i*4.4+2.2,0,2.6-i*0.25,4.4);cyl(M.metal,0,24.2,0,1.6,0.3);
+  const lamp=std({color:0xfff2c0,emissive:0xffe08a,emissiveIntensity:0.3});glows.push([lamp,0.3,4]);cyl(lamp,0,25.3,0,1.1,2);cyl(M.roofCone,0,26.8,0,1.4,1);setCtx(0,0,0);
+  POIS.push({name:'Harbour Pier',x:-30,z:ZMIN-30,kind:'park'},{name:'Lighthouse',x:150,z:ZMIN-70,kind:'landmark'});}
 // --- Main St keeps going east and west ---
 fillRow(-180,-126,6,1);fillRow(89,150,6,1);fillRow(-180,-126,28,-1);fillRow(89,150,28,-1);
 // --- fronts on Park Ave ---
@@ -1646,7 +1662,7 @@ function moveWalk(fwd,side){
   walk.pos.x+=-sy*fwd+cy*side;walk.pos.z+=-cy*fwd-sy*side;
   collide(walk.pos,0.3);
   for(const n of npcs){const dx=walk.pos.x-n.x,dz=walk.pos.z-n.z,d=Math.hypot(dx,dz);if(d<0.55&&d>1e-4){walk.pos.x=n.x+dx/d*0.55;walk.pos.z=n.z+dz/d*0.55;}}
-  carPush(walk.pos,0.3);walk.pos.x=clamp(walk.pos.x,XMIN+2,XMAX-2);walk.pos.z=clamp(walk.pos.z,ZMIN+2,ZMAX-2);
+  carPush(walk.pos,0.3);walk.pos.x=clamp(walk.pos.x,XMIN+2,XMAX-2);walk.pos.z=clamp(walk.pos.z,ZMIN-62,ZMAX-2);   // north limit reaches the end of the pier; the railing stops you elsewhere
 }
 canvas.addEventListener('contextmenu',e=>e.preventDefault());
 canvas.addEventListener('pointerdown',e=>{canvas.focus();canvas.setPointerCapture(e.pointerId);pointers.set(e.pointerId,{x:e.clientX,y:e.clientY,b:e.button,shift:e.shiftKey});
@@ -2078,7 +2094,7 @@ function xrUpdate(dt){
   else{const ddx=h.x-p.x,ddz=h.z-p.z,steps=Math.max(1,Math.ceil(Math.hypot(ddx,ddz)/0.08)),fy=xrState.pos.y;
    if(steps>60){p.x=h.x;p.z=h.z;collide(p,0.25,fy);}else for(let k=0;k<steps;k++){p.x+=ddx/steps;p.z+=ddz/steps;collide(p,0.25,fy);}}
   for(const n of npcs){if(n.state==='down')continue;const dx=p.x-n.x,dz=p.z-n.z,d=Math.hypot(dx,dz);if(d<0.5&&d>1e-4){p.x=n.x+dx/d*0.5;p.z=n.z+dz/d*0.5;}}
-  if(xrState.pos.y<1)carPush(p,0.25);p.x=clamp(p.x,XMIN+2,XMAX-2);p.z=clamp(p.z,ZMIN+2,ZMAX-2);
+  if(xrState.pos.y<1)carPush(p,0.25);p.x=clamp(p.x,XMIN+2,XMAX-2);p.z=clamp(p.z,ZMIN-62,ZMAX-2);
   xrState.pos.x+=p.x-h.x;xrState.pos.z+=p.z-h.z;
   // gravity: stand on whatever is under you (ground, sidewalk, rooftop, landing); fall if you step off
   if(!xrState.climbing){const fl=floorBelow(p.x,p.z,xrState.pos.y);
@@ -2360,7 +2376,7 @@ XST.forEach(st=>{CLANES.push({axis:'x',dir:1,c:st.c+2.6,a:XMIN+10,b:XMAX-10,stop
   {axis:'x',dir:-1,c:st.c-2.6,a:XMAX-10,b:XMIN+10,stops:SIGZ.map(z=>z.c+z.h+4.2),group:'main',n:st.n==='Main St'?7:5});});
 SIGZ.forEach(zs=>{const zEnd=zs.z1?zs.z1-5:ZMAX-10,up={axis:'z',dir:-1,c:zs.c+2.8,a:zEnd,b:ZMIN+10,stops:XST.map(x=>x.c+x.h+3.8),group:'cross',n:4},
   dn={axis:'z',dir:1,c:zs.c-2.8,a:ZMIN+10,b:zEnd,stops:XST.map(x=>x.c-x.h-3.8),group:'cross',n:4};
-  if(zs.z1)dn.loop=up;   // dead-end avenue: cars turn around at the end instead of vanishing
+  dn.loop=up;up.loop=dn;   // cars turn around at the ends of an avenue instead of vanishing and reappearing
   CLANES.push(up,dn);});
 CLANES.forEach(L=>{L.len=Math.abs(L.b-L.a);L.cars=[];});
 const CARS=[];
@@ -3251,7 +3267,7 @@ function physicsUpdate(dt){
   pTimer-=dt;
   if(pTimer<=0){pTimer=0.5;activeProps.forEach(i=>{const p=PROPS[i],b=p.body;
     // reset only things that really left the world (the old ±220 box wrongly reset every shop item west of x=-220 or east of x=220)
-    if(b.position.y<-2||b.position.x<XMIN-5||b.position.x>XMAX+5||b.position.z<ZMIN-5||b.position.z>ZMAX+5){resetProp(i);return;}
+    if(b.position.y<-2||b.position.x<XMIN-5||b.position.x>XMAX+5||b.position.z<ZMIN-70||b.position.z>ZMAX+5){resetProp(i);return;}
     if(!p.heldBy&&b.sleepState===CANNON.Body.SLEEPING&&Math.hypot(b.position.x-PLAYER.x,b.position.z-PLAYER.z)>7)deactivateProp(i);});}
   activeProps.forEach(i=>writeProp(PROPS[i]));
   for(const t in PIM)if(PDIRTY[t]){PIM[t].instanceMatrix.needsUpdate=true;PDIRTY[t]=false;}
@@ -3402,6 +3418,7 @@ function enterHeli(){
 function exitHeli(){
   if(!HELI.on)return;const gr=heliGround(HELI.x,HELI.z,HELI.y);
   if(HELI.y-gr>0.4||Math.hypot(HELI.vx,HELI.vz)>2){toast('Land first, then get out.');sfx('no');return;}
+  if(!xrState.on&&gr-heightAt(HELI.x,HELI.z)>0.6){toast('Land on the ground to get out. Rooftops are for VR climbers.');sfx('no');return;}
   HELI.on=false;const sd=Math.cos(HELI.yaw),sn=Math.sin(HELI.yaw),p={x:HELI.x+sd*2.6,z:HELI.z-sn*2.6};
   if(xrState.on){const yc=Math.cos(xrState.yaw),ys=Math.sin(xrState.yaw),h=XRHEAD.p;xrState.pos.set(p.x-(h.x*yc+h.z*ys),floorBelow(p.x,p.z,HELI.y+0.5),p.z-(-h.x*ys+h.z*yc));xrState.last=null;}
   else{walk.pos.set(p.x,1.85,p.z);walk.eye=floorBelow(p.x,p.z,HELI.y+0.5)+1.7;walk.yaw=HELI.yaw+Math.PI/2;walk.pitch=0;}
@@ -3593,7 +3610,9 @@ document.getElementById('load').hidden=true;
 try{if(localStorage.getItem(SAVEKEY))setTimeout(()=>loadGame(true),300);else toast('Welcome to Cheet City. Press P for your phone.');}catch(e){}
 try{if(SETTINGS.intro||!localStorage.getItem('cheetcity_intro_seen'))setTimeout(playIntro,500);}catch(e){}
 window.__city={SOLIDS,FLOORS,SHOPS,npcs,LANES,heightAt,collide,START,frame,PROPS,STATICS,PLAYER,walk,world,camera,xr:{xrState,xrUpdate,ctrls,XRHEAD,onXRStart,onXREnd,poseHand,makeHand,buildHand,tryGrab,dropHeld,updateHandVisuals},
-  game:{getTod:()=>tod,WORLD,JOBS,PHONE,togglePhone,drawPhone,startTaxi,startDelivery,quitJob,saveGame,loadGame,talkTo,nearPerson,skipTime,ANCHORS,BENCHES,CHUNKS,updateChunks,floorBelow,climbPick,CLIMBS,HFLOORS,POIS,BLDGS,intKids:()=>INTKIDS,holsterGripPoint,KIT,HOLSTER,holsterPose,holsterGun,drawGun,MAGS,AMMO,MDEF,spawnMag,ejectMag,insertMag,tryGrab,dropHeld,updateHolds,DRIVE,enterCar,exitCar,nearCar,driveUpdate,xrDrive,seatInfo,CARS,GUNS,shoot,spawnGun,raycast,LB,torso,BODY,bodyRoot,REF,DESK,lightState,hitNPC,openDialogue,closeDialogue,nearStaff,unpaidFor,getDLG:()=>DLG,getWallet:()=>WALLET,deskGrab,deskPunch,openMenu,drawMenu,menuPanel,dlgPanel,activateNear,activeProps,refreshStatics,activeS,bleed,drops}};
+  game:{getTod:()=>tod,WORLD,JOBS,PHONE,togglePhone,drawPhone,startTaxi,startDelivery,quitJob,saveGame,loadGame,talkTo,nearPerson,skipTime,ANCHORS,BENCHES,CHUNKS,updateChunks,floorBelow,climbPick,CLIMBS,HFLOORS,POIS,BLDGS,intKids:()=>INTKIDS,holsterGripPoint,KIT,HOLSTER,holsterPose,holsterGun,drawGun,MAGS,AMMO,MDEF,spawnMag,ejectMag,insertMag,tryGrab,dropHeld,updateHolds,DRIVE,enterCar,exitCar,nearCar,driveUpdate,xrDrive,seatInfo,CARS,GUNS,shoot,spawnGun,raycast,LB,torso,BODY,bodyRoot,REF,DESK,lightState,hitNPC,openDialogue,closeDialogue,nearStaff,unpaidFor,getDLG:()=>DLG,getWallet:()=>WALLET,deskGrab,deskPunch,openMenu,drawMenu,menuPanel,dlgPanel,activateNear,activeProps,refreshStatics,activeS,bleed,drops,
+  // aviation, cutscenes, guns and settings (for testing from the console)
+  HELI,heliUpdate,nearHeli,enterHeli,exitHeli,JETS,updateJet,AIHELI,CUT,playIntro,playCutscene,endCutscene,updateCutscene,deskReload,renderGuns,deskGunUpdate,SETTINGS,applyFov,GDEF,BLDGS_:BLDGS}};
 renderer.setAnimationLoop(frame);
 
 /* CHEET CITY: META IMMERSIVE PWA AUTO-START */

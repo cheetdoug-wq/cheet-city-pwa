@@ -45,7 +45,25 @@ The signed output is `app-release-signed.apk`. Keep the signing key safe; update
 
 Meta's current official packaging guide: https://developers.meta.com/vr/documentation/web/pwa-packaging/
 
+## What's new in this version
+- Bigger map: North St with two new rows of buildings, and a harbour promenade with a pier and a lighthouse.
+- Guns: pistol, SMG, rifle and shotgun. On a computer: click to fire (hold for automatic), right-click to aim down the sights, T reloads (takes time), X holsters. Crosshair, ammo counter, recoil, spread, shell casings and smoke. People take damage (head shots count more).
+- Helicopter: on the airport helipad. Space climbs, Shift descends, W/S fly, A/D turn, Q/Z slide sideways, V switches camera, E gets out once landed on the ground. In VR: left stick flies, right stick turns and climbs, B gets out.
+- Airport: jets land, turn round and take off again; airliners cruise overhead; a news helicopter and a police helicopter (searchlight at night) circle the city.
+- Cutscenes: an intro flyover on first launch, a pre-flight shot the first time you board the helicopter, and an arrivals shot the first time you visit the viewing deck. Skip with the button, Esc, Space or a click. They never play in VR.
+- Settings (button or O key): look sensitivity, field of view, invert look, mouse lock, and VR calibration (gun grip angle, snap-turn angle, smooth-turn speed, height adjust, seated play). The VR menu (left Y) has the same calibration plus "Recalibrate body height".
+
+## Bugs fixed in this version
+- Shop items west of x=-220 or east of x=220 snapped back to the shelf as soon as they were touched.
+- CHEETMART and its car park were built on top of West Ave; people walked through its walls.
+- Tower Ave ran straight across the runway; it now ends at the airport with a turnaround.
+- Cars on the avenues vanished at the map edge and reappeared at the other end; they now turn around.
+- On a computer, bullets flew parallel to the gun instead of to the centre of the screen, so they never hit what you aimed at.
+- Automatic fire depended on keyboard repeat (a half-second pause after the first shot); reloading was instant and could waste a full magazine.
+- E, F, G and Q acted on your walk position while in Orbit mode.
+- The CHEETMART pylon sign's collision box was placed far outside the map.
+
 ## Current limits
 - This is not a standalone native Unity/Unreal game; it packages the existing web game as a Quest PWA/APK.
-- It has not been tested on a physical Quest in this environment.
+- It has not been tested on a physical Quest in this environment. The VR helicopter controls and the calibration options in particular need trying on a headset.
 - Test the hosted version in Quest Browser first. Meta says PWA uses the same rendering engine as Quest Browser, so any remaining rendering or frame-rate issue must be fixed in the web game before packaging.
